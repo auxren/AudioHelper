@@ -222,3 +222,14 @@ TradersLittleJedi.spec  PyInstaller spec
 - **tkinterdnd2** — drag-and-drop (optional; the app runs without it)
 - **Pillow** — cover-art previews and icon generation (optional)
 - ffmpeg, ffprobe, flac, metaflac, lame on PATH (or bundled on Windows)
+
+---
+
+## License
+
+Trader's Little Jedi is licensed under
+[**Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0)**](https://creativecommons.org/licenses/by-nc/4.0/).
+
+You are free to **use, copy, modify, fork, and share** it for any
+**non-commercial** purpose, as long as you give appropriate **attribution**.
+**Commercial use is not permitted.** See [LICENSE](LICENSE) for the full text.
