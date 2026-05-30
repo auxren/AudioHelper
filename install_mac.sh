@@ -134,6 +134,11 @@ exec "$VENV_DIR/bin/python3" TradersLittleJedi.py
 SCRIPT
 chmod +x "$MACOS_DIR/${APP_NAME}"
 
+# Copy icon into the bundle
+if [[ -f "$APP_DIR/assets/icon.icns" ]]; then
+    cp "$APP_DIR/assets/icon.icns" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
+fi
+
 cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -150,10 +155,14 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
     <string>1.0</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>LSMinimumSystemVersion</key>
     <string>12.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSRequiresAquaSystemAppearance</key>
+    <false/>
 </dict>
 </plist>
 PLIST
