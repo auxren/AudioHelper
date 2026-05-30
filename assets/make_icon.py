@@ -24,45 +24,78 @@ except ImportError:
     _PIL = False
 
 
+def _hex(h: str) -> tuple[int, int, int]:
+    h = h.lstrip("#")
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
+def _lerp_color(a: tuple, b: tuple, t: float) -> tuple[int, int, int]:
+    return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))
+
+
 def _draw_icon(size: int) -> "Image.Image":
-    """Draw the TLJ icon at *size* x *size* pixels."""
+    """Draw the TLJ icon — Dead-inspired gradient waveform on dark purple."""
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     d   = ImageDraw.Draw(img)
 
-    # ── Background: dark navy rounded square ──────────────────────────────────
-    bg_color = (13, 17, 23, 255)       # #0d1117
-    r = max(2, size // 7)              # corner radius
-    d.rounded_rectangle([0, 0, size - 1, size - 1], radius=r, fill=bg_color)
+    # ── Background: dark purple rounded square (ConcertTagger backgroundGradient)
+    bg = (15, 11, 26, 255)   # #0F0B1A
+    r  = max(2, size // 6)
+    d.rounded_rectangle([0, 0, size - 1, size - 1], radius=r, fill=bg)
 
-    # ── Waveform bars ─────────────────────────────────────────────────────────
-    bar_heights = [0.30, 0.55, 0.80, 1.00, 0.85, 0.60, 0.75, 0.45, 0.25]
-    n = len(bar_heights)
-    pad       = size * 0.15
+    # ── Subtle radial glow centre ──────────────────────────────────────────────
+    glow_img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    gd = ImageDraw.Draw(glow_img)
+    glow_r = size // 2
+    for step in range(20, 0, -1):
+        alpha = int(30 * step / 20)
+        gs = int(glow_r * step / 20)
+        cx, cy = size // 2, size // 2
+        gd.ellipse([cx - gs, cy - gs, cx + gs, cy + gs],
+                   fill=(119, 68, 221, alpha))
+    img = Image.alpha_composite(img, glow_img)
+    d = ImageDraw.Draw(img)
+
+    # ── Waveform bars (funGradient1: Purple → Blue → Pink) ───────────────────
+    bar_heights = [0.28, 0.50, 0.78, 0.95, 1.00, 0.88, 0.70, 0.55, 0.35]
+    n          = len(bar_heights)
+    pad        = size * 0.13
     bar_area_w = size - 2 * pad
-    bar_area_h = size * 0.55
-    gap_ratio  = 0.35                  # fraction of slot that is the gap
+    bar_area_h = size * 0.56
+    gap_ratio  = 0.32
     slot_w     = bar_area_w / n
     bar_w      = max(1, slot_w * (1 - gap_ratio))
     center_y   = size * 0.52
 
-    glow_color = (61, 143, 209, 60)    # dim blue glow
-    bar_color  = (61, 143, 209, 255)   # #3d8fd1
+    # funGradient1 colors
+    c_purple = _hex("#9933CC")
+    c_blue   = _hex("#3366E6")
+    c_pink   = _hex("#FF6699")
 
     for i, h in enumerate(bar_heights):
+        t    = i / (n - 1)
+        col  = (_lerp_color(c_purple, c_blue, min(1, t * 2))
+                if t < 0.5 else
+                _lerp_color(c_blue, c_pink, (t - 0.5) * 2))
+        col_rgba  = (*col, 255)
+        glow_rgba = (*col, 55)
+
         x0 = pad + i * slot_w + (slot_w - bar_w) / 2
         x1 = x0 + bar_w
         bh = h * bar_area_h / 2
 
-        # Soft glow (wider, semi-transparent rectangle)
-        glow = max(1, bar_w * 1.8)
-        gx0  = pad + i * slot_w + (slot_w - glow) / 2
-        d.rectangle([gx0, center_y - bh * 1.1,
-                     gx0 + glow, center_y + bh * 1.1],
-                    fill=glow_color)
-        # Bar
-        d.rectangle([x0, center_y - bh, x1, center_y + bh], fill=bar_color)
-
-    # ── Subtle bottom label: "TLJ" at small sizes is unreadable — skip ────────
+        # Glow
+        gw  = max(1, bar_w * 2.0)
+        gx0 = pad + i * slot_w + (slot_w - gw) / 2
+        d.rectangle([gx0, center_y - bh * 1.15, gx0 + gw, center_y + bh * 1.15],
+                    fill=glow_rgba)
+        # Bar (rounded caps at large sizes)
+        if size >= 128:
+            br = max(1, int(bar_w * 0.35))
+            d.rounded_rectangle([x0, center_y - bh, x1, center_y + bh],
+                                 radius=br, fill=col_rgba)
+        else:
+            d.rectangle([x0, center_y - bh, x1, center_y + bh], fill=col_rgba)
 
     return img
 

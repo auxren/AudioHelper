@@ -4,6 +4,7 @@ from tkinter import ttk, messagebox
 from pathlib import Path
 
 from . import __version__
+from . import theme as _theme
 from .config import Config
 from .runner import JobRunner
 from .tools import get_tool
@@ -59,6 +60,9 @@ class MainWindow(_BaseTk):  # type: ignore[misc,valid-type]
         self.config_obj = Config()
         self.minsize(640, 400)
         self._apply_geometry(self.config_obj.get("window_geometry", "900x560"))
+
+        # Apply Dead-inspired dark theme (ConcertTagger + HighGrabber design)
+        _theme.apply(self)
 
         self._build_menu()
         self._build_body()
@@ -156,37 +160,40 @@ class MainWindow(_BaseTk):  # type: ignore[misc,valid-type]
         self._queued_files: list[str] = []
         qbar = ttk.Frame(self)
         qbar.pack(fill="x", padx=6, pady=(6, 2))
-        self._queue_label = ttk.Label(qbar, text="No files loaded", foreground="gray")
+        self._queue_label = ttk.Label(qbar, text="No files loaded",
+                                      style="Secondary.TLabel")
         self._queue_label.pack(side="left")
         self._queue_actions_btn = ttk.Button(
             qbar, text="Open actions…", state="disabled",
             command=self._reopen_picker)
         self._queue_actions_btn.pack(side="left", padx=6)
         ttk.Button(qbar, text="Clear files",
+                   style="Ghost.TButton",
                    command=self._clear_queue).pack(side="left")
 
         ttk.Separator(self, orient="horizontal").pack(fill="x", padx=6)
 
         bar = ttk.Frame(self)
         bar.pack(fill="x", padx=6, pady=(4, 0))
-        ttk.Label(bar, text="Log").pack(side="left")
-        ttk.Button(bar, text="Cancel job", command=lambda: self.runner.cancel()).pack(side="right", padx=4)
-        ttk.Button(bar, text="Clear", command=lambda: self.log.delete("1.0", "end")).pack(side="right")
+        ttk.Label(bar, text="Activity log", style="Secondary.TLabel").pack(side="left")
+        ttk.Button(bar, text="Cancel job", style="Ghost.TButton",
+                   command=lambda: self.runner.cancel()).pack(side="right", padx=4)
+        ttk.Button(bar, text="Clear", style="Ghost.TButton",
+                   command=lambda: self.log.delete("1.0", "end")).pack(side="right")
 
         body = ttk.Frame(self)
         body.pack(fill="both", expand=True, padx=6, pady=6)
-        self.log = tk.Text(
-            body, height=20, wrap="none",
-            background="#101418", foreground="#d8d8d8",
-            insertbackground="#d8d8d8", font=("Consolas", 9),
-        )
+        self.log = tk.Text(body, height=20, wrap="none")
+        _theme.style_log(self.log)
         ys = ttk.Scrollbar(body, orient="vertical", command=self.log.yview)
         self.log.configure(yscrollcommand=ys.set)
         ys.pack(side="right", fill="y")
         self.log.pack(fill="both", expand=True)
-        self.log.insert("end", f"Trader's Little Jedi {__version__} ready.\n")
+        self.log.insert("end", f"Trader's Little Jedi {__version__} ready.\n",
+                        ("ok",))
 
-        self.status = ttk.Label(self, text="Ready", anchor="w", relief="sunken", padding=(6, 2))
+        self.status = ttk.Label(self, text="Ready", anchor="w",
+                                style="Status.TLabel")
         self.status.pack(fill="x", side="bottom")
 
     # ----- geometry -----
@@ -318,25 +325,49 @@ class MainWindow(_BaseTk):  # type: ignore[misc,valid-type]
     # ----- log -----
 
     def append_log(self, text: str) -> None:
+        """Append *text* to the log, applying HighGrabber-style color tags per line."""
         i = 0
         n = len(text)
+        # Buffer each line so we can tag it once complete
+        line_buf: list[str] = []
+
+        def _flush(tag: str) -> None:
+            if line_buf:
+                content = "".join(line_buf)
+                self.log.insert("end", content, (tag,) if tag else ())
+                line_buf.clear()
+
         while i < n:
             j = i
             while j < n and text[j] not in "\r\n":
                 j += 1
             if j > i:
-                self.log.insert("end", text[i:j])
+                line_buf.append(text[i:j])
             if j < n:
                 ch = text[j]
                 if ch == "\r":
                     if j + 1 < n and text[j + 1] == "\n":
+                        # CRLF — flush current line with color then newline
+                        tag = _theme.classify_log_line("".join(line_buf))
+                        _flush(tag)
                         self.log.insert("end", "\n")
                         j += 1
                     else:
+                        # CR alone — overwrite current line
+                        _flush("")
                         self.log.delete("end-1c linestart", "end-1c")
                 else:
+                    # LF
+                    tag = _theme.classify_log_line("".join(line_buf))
+                    _flush(tag)
                     self.log.insert("end", "\n")
             i = j + 1
+
+        # Flush any trailing partial line (no newline at end)
+        if line_buf:
+            tag = _theme.classify_log_line("".join(line_buf))
+            _flush(tag)
+
         self.log.see("end")
 
     def _append_log_threadsafe(self, text: str) -> None:
