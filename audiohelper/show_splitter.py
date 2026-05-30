@@ -87,6 +87,42 @@ def _duration(probe: dict) -> float:
         return 0.0
 
 
+def _list_audio_devices(ffmpeg: Path) -> list[str]:
+    """Return output device names available on this system."""
+    import sys, re
+    devices: list[str] = ["System default"]
+    if sys.platform == "darwin":
+        # CoreAudio via avfoundation
+        try:
+            r = subprocess.run(
+                [str(ffmpeg), "-f", "avfoundation", "-list_devices", "true",
+                 "-i", "dummy"],
+                capture_output=True, text=True, timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            for line in r.stderr.splitlines():
+                m = re.search(r'\[AVFoundation.*?\] \[(\d+)\] (.+)$', line)
+                if m:
+                    devices.append(f"{m.group(2)} [{m.group(1)}]")
+        except Exception:
+            pass
+    elif sys.platform == "win32":
+        try:
+            r = subprocess.run(
+                [str(ffmpeg), "-list_devices", "true", "-f", "dshow", "-i", "dummy"],
+                capture_output=True, text=True, timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            for line in r.stderr.splitlines():
+                if "DirectShow audio" in line or '"' in line:
+                    m = re.search(r'"([^"]+)"', line)
+                    if m:
+                        devices.append(m.group(1))
+        except Exception:
+            pass
+    return devices
+
+
 def _detect_silences(ffmpeg: Path, path: Path,
                      noise_db: float = -40.0,
                      min_dur: float = 0.4) -> list[float]:
@@ -185,6 +221,17 @@ class WaveformView(tk.Frame):
                           relief="flat", width=4 if label == "Fit" else 3)
             b.pack(side="right", padx=1)
             self._zoom_btns.append(b)
+
+        # Audio output device selector
+        tk.Label(tr, text="Out:", fg="#9999C0", bg=self.BG_COLOR,
+                 font=("Segoe UI", 9)).pack(side="right", padx=(16, 2))
+        self._device_var = tk.StringVar(value="System default")
+        self._device_menu = ttk.Combobox(
+            tr, textvariable=self._device_var,
+            values=["System default"], state="readonly", width=22)
+        self._device_menu.pack(side="right", padx=(0, 4))
+        # Populate devices after a short delay (ffmpeg subprocess)
+        self.after(1500, self._populate_devices)
 
         # Scrollbar
         self.hbar = ttk.Scrollbar(self, orient="horizontal",
@@ -361,7 +408,13 @@ class WaveformView(tk.Frame):
                 pts_top += [px, mid - amp]
                 pts_bot += [px, mid + amp]
             if len(pts_top) >= 4:
-                poly = pts_top + list(reversed(pts_bot))
+                # Reverse (x,y) PAIRS from pts_bot so the polygon closes
+                # correctly right-to-left. reversed() alone would swap
+                # individual floats (x↔y), producing the diagonal artifact.
+                np = len(pts_bot) // 2
+                pts_bot_r = [v for i in range(np - 1, -1, -1)
+                             for v in (pts_bot[i * 2], pts_bot[i * 2 + 1])]
+                poly = pts_top + pts_bot_r
                 c.create_polygon(poly, fill=self.WF_COLOR, outline="",
                                  smooth=False)
 
@@ -519,21 +572,45 @@ class WaveformView(tk.Frame):
 
         threading.Thread(target=_extract, daemon=True).start()
 
+    def _populate_devices(self) -> None:
+        if not self._ffmpeg_path or not self._ffmpeg_path.exists():
+            return
+        def _worker():
+            devs = _list_audio_devices(self._ffmpeg_path)
+            self.after(0, lambda: self._device_menu.configure(values=devs))
+        threading.Thread(target=_worker, daemon=True).start()
+
     def _launch_player(self) -> None:
         import sys
         tmp = self._preview_tmp
         if not tmp or not Path(tmp).exists():
             self.btn_play.configure(state="normal")
             return
+        device = self._device_var.get() if hasattr(self, "_device_var") else "System default"
         if sys.platform == "darwin":
-            cmd = ["afplay", tmp]
-        else:
-            # Try ffplay, fall back to aplay (Linux)
-            ffplay = (self._ffmpeg_path.parent / "ffplay" if self._ffmpeg_path else None)
+            # afplay on default device; ffplay for specific device
+            if device and device != "System default" and self._ffmpeg_path:
+                # Extract device index from "Name [N]" format
+                import re as _re
+                m = _re.search(r'\[(\d+)\]$', device)
+                if m:
+                    ffplay = self._ffmpeg_path.parent / "ffplay"
+                    if not ffplay.exists():
+                        ffplay = Path("ffplay")
+                    cmd = [str(ffplay), "-nodisp", "-autoexit",
+                           "-audio_device_index", m.group(1), tmp]
+                else:
+                    cmd = ["afplay", tmp]
+            else:
+                cmd = ["afplay", tmp]
+        elif sys.platform == "win32":
+            ffplay = (self._ffmpeg_path.parent / "ffplay.exe" if self._ffmpeg_path else None)
             if ffplay and ffplay.exists():
                 cmd = [str(ffplay), "-nodisp", "-autoexit", tmp]
             else:
-                cmd = ["aplay", tmp]
+                cmd = ["start", "/b", tmp]
+        else:
+            cmd = ["aplay", tmp]
         try:
             self._play_proc = subprocess.Popen(
                 cmd, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))

@@ -44,6 +44,64 @@ except Exception:
     _BaseTk = tk.Tk  # type: ignore
 
 
+class _ToolTile(tk.Frame):
+    """Clickable home-screen tile with icon, title, description, and hover effect."""
+
+    def __init__(self, parent, icon: str, title: str, desc: str,
+                 command, accent_color: str):
+        super().__init__(parent, cursor="hand2", relief="flat",
+                         bg=_theme.BG_PANEL, bd=0)
+        self._cmd      = command
+        self._bg_norm  = _theme.BG_PANEL
+        self._bg_hover = _theme.BG_HOVER
+
+        # Accent top bar
+        bar = tk.Frame(self, bg=accent_color, height=3)
+        bar.pack(fill="x")
+
+        # Icon
+        ico = tk.Label(self, text=icon, bg=self._bg_norm, fg=accent_color,
+                       font=("Segoe UI", 28))
+        ico.pack(pady=(14, 2))
+
+        # Title
+        ttl = tk.Label(self, text=title, bg=self._bg_norm, fg=_theme.FG_PRIMARY,
+                       font=("Segoe UI", 12, "bold"))
+        ttl.pack()
+
+        # Description
+        dsc = tk.Label(self, text=desc, bg=self._bg_norm, fg=_theme.FG_SECONDARY,
+                       font=("Segoe UI", 9), wraplength=180, justify="center")
+        dsc.pack(pady=(2, 16))
+
+        self._all_widgets = [self, bar, ico, ttl, dsc]
+        for w in self._all_widgets:
+            w.bind("<Enter>",    self._hover_on)
+            w.bind("<Leave>",    self._hover_off)
+            w.bind("<Button-1>", self._click)
+
+    def _hover_on(self, _e=None) -> None:
+        for w in self._all_widgets:
+            if isinstance(w, tk.Frame) and w.cget("height") == 3:
+                continue  # keep accent bar color
+            try:
+                w.configure(bg=self._bg_hover)
+            except Exception:
+                pass
+
+    def _hover_off(self, _e=None) -> None:
+        for w in self._all_widgets:
+            if isinstance(w, tk.Frame) and w.cget("height") == 3:
+                continue
+            try:
+                w.configure(bg=self._bg_norm)
+            except Exception:
+                pass
+
+    def _click(self, _e=None) -> None:
+        self._cmd()
+
+
 class MainWindow(_BaseTk):  # type: ignore[misc,valid-type]
     def __init__(self):
         global _DND_AVAILABLE
@@ -156,45 +214,99 @@ class MainWindow(_BaseTk):  # type: ignore[misc,valid-type]
         self.config(menu=mb)
 
     def _build_body(self) -> None:
-        # ── Persistent file queue bar ──────────────────────────────────────
         self._queued_files: list[str] = []
-        qbar = ttk.Frame(self)
-        qbar.pack(fill="x", padx=6, pady=(6, 2))
-        self._queue_label = ttk.Label(qbar, text="No files loaded",
-                                      style="Secondary.TLabel")
-        self._queue_label.pack(side="left")
-        self._queue_actions_btn = ttk.Button(
-            qbar, text="Open actions…", state="disabled",
-            command=self._reopen_picker)
-        self._queue_actions_btn.pack(side="left", padx=6)
-        ttk.Button(qbar, text="Clear files",
-                   style="Ghost.TButton",
-                   command=self._clear_queue).pack(side="left")
 
-        ttk.Separator(self, orient="horizontal").pack(fill="x", padx=6)
-
-        bar = ttk.Frame(self)
-        bar.pack(fill="x", padx=6, pady=(4, 0))
-        ttk.Label(bar, text="Activity log", style="Secondary.TLabel").pack(side="left")
-        ttk.Button(bar, text="Cancel job", style="Ghost.TButton",
-                   command=lambda: self.runner.cancel()).pack(side="right", padx=4)
-        ttk.Button(bar, text="Clear", style="Ghost.TButton",
-                   command=lambda: self.log.delete("1.0", "end")).pack(side="right")
-
-        body = ttk.Frame(self)
-        body.pack(fill="both", expand=True, padx=6, pady=6)
-        self.log = tk.Text(body, height=20, wrap="none")
-        _theme.style_log(self.log)
-        ys = ttk.Scrollbar(body, orient="vertical", command=self.log.yview)
-        self.log.configure(yscrollcommand=ys.set)
-        ys.pack(side="right", fill="y")
-        self.log.pack(fill="both", expand=True)
-        self.log.insert("end", f"Trader's Little Jedi {__version__} ready.\n",
-                        ("ok",))
-
+        # ── Status bar (packed first so it's always visible at bottom) ────────
         self.status = ttk.Label(self, text="Ready", anchor="w",
                                 style="Status.TLabel")
         self.status.pack(fill="x", side="bottom")
+
+        # ── Activity log (bottom, collapsible) ────────────────────────────────
+        log_frame = tk.Frame(self, bg=_theme.BG_DEEP)
+        log_frame.pack(fill="x", side="bottom", padx=0)
+
+        log_bar = tk.Frame(log_frame, bg=_theme.BG_PANEL)
+        log_bar.pack(fill="x")
+        tk.Label(log_bar, text="  Activity log", bg=_theme.BG_PANEL,
+                 fg=_theme.FG_DIM, font=("Segoe UI", 9)).pack(side="left")
+        tk.Button(log_bar, text="Clear", bg=_theme.BG_PANEL, fg=_theme.FG_DIM,
+                  relief="flat", bd=0, padx=6,
+                  command=lambda: self.log.delete("1.0", "end")).pack(side="right")
+        tk.Button(log_bar, text="Cancel job", bg=_theme.BG_PANEL, fg=_theme.FG_DIM,
+                  relief="flat", bd=0, padx=6,
+                  command=lambda: self.runner.cancel()).pack(side="right")
+
+        self.log = tk.Text(log_frame, height=5, wrap="none")
+        _theme.style_log(self.log)
+        log_ys = ttk.Scrollbar(log_frame, orient="vertical", command=self.log.yview)
+        self.log.configure(yscrollcommand=log_ys.set)
+        log_ys.pack(side="right", fill="y")
+        self.log.pack(fill="x")
+        self.log.insert("end", f"✓ Trader's Little Jedi {__version__} ready.\n", ("ok",))
+
+        # ── Drop target bar ───────────────────────────────────────────────────
+        qbar = tk.Frame(self, bg=_theme.BG_PANEL, pady=3)
+        qbar.pack(fill="x", padx=0)
+        self._queue_label = tk.Label(qbar, text="Drop files here, or use the tools below",
+                                     bg=_theme.BG_PANEL, fg=_theme.FG_DIM,
+                                     font=("Segoe UI", 9))
+        self._queue_label.pack(side="left", padx=10)
+        self._queue_actions_btn = ttk.Button(
+            qbar, text="Open with…", state="disabled",
+            command=self._reopen_picker)
+        self._queue_actions_btn.pack(side="left", padx=4)
+        ttk.Button(qbar, text="Clear", style="Ghost.TButton",
+                   command=self._clear_queue).pack(side="left")
+
+        # ── Tool tile grid ────────────────────────────────────────────────────
+        grid_outer = tk.Frame(self, bg=_theme.BG_DEEP)
+        grid_outer.pack(fill="both", expand=True, padx=0, pady=0)
+
+        # Header
+        hdr = tk.Frame(grid_outer, bg=_theme.BG_DEEP)
+        hdr.pack(fill="x", padx=20, pady=(16, 8))
+        tk.Label(hdr, text="Trader's Little Jedi",
+                 bg=_theme.BG_DEEP, fg=_theme.FG_PRIMARY,
+                 font=("Segoe UI", 18, "bold")).pack(side="left")
+        tk.Label(hdr, text=f"  v{__version__}",
+                 bg=_theme.BG_DEEP, fg=_theme.FG_DIM,
+                 font=("Segoe UI", 11)).pack(side="left", anchor="s", pady=(0, 3))
+        ttk.Button(hdr, text="⚙  Settings", command=self._open_prefs).pack(side="right")
+
+        grid = tk.Frame(grid_outer, bg=_theme.BG_DEEP)
+        grid.pack(fill="both", expand=True, padx=14, pady=(0, 14))
+
+        TILES = [
+            # Row 0 — primary audio tools
+            ("✂", "Show Splitter",    "Split a full-show WAV/FLAC\ninto individual tracks",
+             self._open_show_splitter, _theme.DEAD_PURPLE),
+            ("♪", "Live Show Tagger", "Tag files from eTree\nsetlist text files",
+             self._open_jedi_tagger,  _theme.DEAD_BLUE),
+            ("⇄", "Convert Format",   "Encode, decode, re-encode\nFLAC · WAV · MP3 · APE · SHN",
+             self._open_encode_wav,   _theme.DEAD_ORANGE),
+            ("✎", "Audio Editor",     "Waveform editor, trim,\nsplit, gapless merge",
+             self._open_audio_editor, _theme.DEAD_GREEN),
+            # Row 1 — utilities
+            ("✓", "Checksums",        "Create & verify\nMD5 · FFP · SFV · CFP · ST5",
+             self._open_create_chk,   _theme.DEAD_BLUE),
+            ("⬡", "Torrents",         "Create and verify\ntorrent files",
+             self._open_create_torrent, _theme.DEAD_PURPLE),
+            ("◎", "Analysis",         "File details, integrity tests,\nReplayGain, SBE check",
+             self._open_analysis_menu, _theme.DEAD_PINK),
+            ("⊞", "More Tools",       "DSD edit, batch rename,\nstrip headers, repair",
+             self._open_more_menu,    _theme.DEAD_YELLOW),
+        ]
+
+        cols = 4
+        for i, (icon, title, desc, cmd, accent) in enumerate(TILES):
+            row, col = divmod(i, cols)
+            tile = _ToolTile(grid, icon, title, desc, cmd, accent)
+            tile.grid(row=row, column=col, padx=6, pady=6, sticky="nsew")
+
+        for c in range(cols):
+            grid.columnconfigure(c, weight=1, uniform="col")
+        grid.rowconfigure(0, weight=1)
+        grid.rowconfigure(1, weight=1)
 
     # ----- geometry -----
 
@@ -379,6 +491,66 @@ class MainWindow(_BaseTk):  # type: ignore[misc,valid-type]
         self.after(0, f)
 
     # ----- dialog launchers -----
+
+    def _open_show_splitter(self) -> None:
+        ShowSplitterDialog(self, self.config_obj, self.runner)
+
+    def _open_analysis_menu(self) -> None:
+        """Open a quick-picker for Analysis tools."""
+        menu = tk.Menu(self, tearoff=0)
+        menu.configure(bg=_theme.BG_PANEL, fg=_theme.FG_PRIMARY,
+                       activebackground=_theme.BG_SELECT,
+                       activeforeground=_theme.FG_PRIMARY)
+        menu.add_command(label="Show file details (MediaInfo)…",
+                         command=self._open_details)
+        menu.add_command(label="Test encoded audio files",
+                         command=self._open_test_encoded)
+        menu.add_command(label="Check audio files for SBEs",
+                         command=self._open_check_sbe)
+        menu.add_command(label="Test WAV files for MPEG source",
+                         command=self._open_test_mpeg)
+        menu.add_separator()
+        menu.add_command(label="Repair FLAC / WAV files…",
+                         command=self._open_repair)
+        menu.add_command(label="Scan ReplayGain…",
+                         command=self._open_replaygain)
+        try:
+            menu.tk_popup(self.winfo_pointerx(), self.winfo_pointery())
+        finally:
+            menu.grab_release()
+
+    def _open_more_menu(self) -> None:
+        """Open a quick-picker for secondary tools."""
+        menu = tk.Menu(self, tearoff=0)
+        menu.configure(bg=_theme.BG_PANEL, fg=_theme.FG_PRIMARY,
+                       activebackground=_theme.BG_SELECT,
+                       activeforeground=_theme.FG_PRIMARY)
+        menu.add_command(label="DSD editor / trim…",
+                         command=self._open_dsd_edit)
+        menu.add_command(label="Batch rename files…",
+                         command=self._open_batch_rename)
+        menu.add_command(label="Strip / repair audio header",
+                         command=self._open_strip_header)
+        menu.add_command(label="Convert encoding format",
+                         command=self._open_convert)
+        menu.add_command(label="Fix SBEs",
+                         command=self._open_fix_sbe)
+        menu.add_separator()
+        menu.add_command(label="Verify checksum files",
+                         command=self._open_verify_chk)
+        menu.add_command(label="Check torrent",
+                         command=self._open_check_torrent)
+        menu.add_command(label="Re-encode FLAC files",
+                         command=self._open_reencode_flac)
+        menu.add_command(label="Decode audio files",
+                         command=self._open_decode)
+        menu.add_separator()
+        menu.add_command(label="Update all CLI tools…",
+                         command=self._open_update_tools)
+        try:
+            menu.tk_popup(self.winfo_pointerx(), self.winfo_pointery())
+        finally:
+            menu.grab_release()
 
     def _open_encode_wav(self) -> None:
         EncodeWavDialog(self, self.config_obj, self.runner)
