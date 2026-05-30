@@ -116,8 +116,8 @@ class MainWindow(_BaseTk):  # type: ignore[misc,valid-type]
             tk.Tk.__init__(self)
         self.title("Trader's Little Jedi")
         self.config_obj = Config()
-        self.minsize(640, 400)
-        self._apply_geometry(self.config_obj.get("window_geometry", "900x560"))
+        self.minsize(860, 620)
+        self._apply_geometry(self.config_obj.get("window_geometry", "1000x740"))
 
         # Apply Dead-inspired dark theme (ConcertTagger + HighGrabber design)
         _theme.apply(self)
@@ -221,28 +221,41 @@ class MainWindow(_BaseTk):  # type: ignore[misc,valid-type]
                                 style="Status.TLabel")
         self.status.pack(fill="x", side="bottom")
 
-        # ── Activity log (bottom, collapsible) ────────────────────────────────
+        # ── Activity log (bottom, collapsible — hidden by default) ────────────
         log_frame = tk.Frame(self, bg=_theme.BG_DEEP)
         log_frame.pack(fill="x", side="bottom", padx=0)
 
         log_bar = tk.Frame(log_frame, bg=_theme.BG_PANEL)
         log_bar.pack(fill="x")
-        tk.Label(log_bar, text="  Activity log", bg=_theme.BG_PANEL,
-                 fg=_theme.FG_DIM, font=("Segoe UI", 9)).pack(side="left")
-        tk.Button(log_bar, text="Clear", bg=_theme.BG_PANEL, fg=_theme.FG_DIM,
+        # Disclosure toggle on the left; collapsed by default.
+        self._log_expanded = bool(self.config_obj.get("log_expanded", False))
+        self._log_toggle = tk.Button(
+            log_bar, text="▸  Activity log", bg=_theme.BG_PANEL, fg=_theme.FG_DIM,
+            relief="flat", bd=0, padx=8, anchor="w",
+            activebackground=_theme.BG_PANEL, activeforeground=_theme.FG_PRIMARY,
+            command=self._toggle_log)
+        self._log_toggle.pack(side="left")
+        # Cancel/Clear live in a frame that's hidden along with the log body.
+        self._log_buttons = tk.Frame(log_bar, bg=_theme.BG_PANEL)
+        tk.Button(self._log_buttons, text="Clear", bg=_theme.BG_PANEL, fg=_theme.FG_DIM,
                   relief="flat", bd=0, padx=6,
                   command=lambda: self.log.delete("1.0", "end")).pack(side="right")
-        tk.Button(log_bar, text="Cancel job", bg=_theme.BG_PANEL, fg=_theme.FG_DIM,
+        tk.Button(self._log_buttons, text="Cancel job", bg=_theme.BG_PANEL, fg=_theme.FG_DIM,
                   relief="flat", bd=0, padx=6,
                   command=lambda: self.runner.cancel()).pack(side="right")
 
-        self.log = tk.Text(log_frame, height=5, wrap="none")
+        # Body holds the text widget + scrollbar; shown only when expanded.
+        self._log_body = tk.Frame(log_frame, bg=_theme.BG_DEEP)
+        self.log = tk.Text(self._log_body, height=6, wrap="none")
         _theme.style_log(self.log)
-        log_ys = ttk.Scrollbar(log_frame, orient="vertical", command=self.log.yview)
+        log_ys = ttk.Scrollbar(self._log_body, orient="vertical", command=self.log.yview)
         self.log.configure(yscrollcommand=log_ys.set)
         log_ys.pack(side="right", fill="y")
-        self.log.pack(fill="x")
+        self.log.pack(fill="both", expand=True)
         self.log.insert("end", f"✓ Trader's Little Jedi {__version__} ready.\n", ("ok",))
+
+        if self._log_expanded:
+            self._show_log()
 
         # ── Drop target bar ───────────────────────────────────────────────────
         qbar = tk.Frame(self, bg=_theme.BG_PANEL, pady=3)
@@ -310,6 +323,30 @@ class MainWindow(_BaseTk):  # type: ignore[misc,valid-type]
             grid.columnconfigure(c, weight=1, uniform="col")
         for r in range(3):
             grid.rowconfigure(r, weight=1)
+
+    # ----- activity log show/hide -----
+
+    def _toggle_log(self) -> None:
+        if self._log_expanded:
+            self._hide_log()
+        else:
+            self._show_log()
+
+    def _show_log(self) -> None:
+        self._log_expanded = True
+        self._log_toggle.configure(text="▾  Activity log")
+        self._log_buttons.pack(side="right")
+        self._log_body.pack(fill="both", expand=False)
+        self.config_obj["log_expanded"] = True
+        self.config_obj.save()
+
+    def _hide_log(self) -> None:
+        self._log_expanded = False
+        self._log_toggle.configure(text="▸  Activity log")
+        self._log_buttons.pack_forget()
+        self._log_body.pack_forget()
+        self.config_obj["log_expanded"] = False
+        self.config_obj.save()
 
     # ----- geometry -----
 

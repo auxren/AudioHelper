@@ -1,8 +1,34 @@
 ﻿import json
+import os
+import sys
 from pathlib import Path
 from typing import Any
 
-CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.json"
+
+def _default_config_path() -> Path:
+    """Where config.json lives.
+
+    Dev runs (python TradersLittleJedi.py) keep it next to the source for
+    convenience. A frozen/bundled app (.app / .exe) can't write inside its
+    own read-only bundle, so use a per-user app-data directory instead.
+    """
+    if getattr(sys, "frozen", False):
+        if sys.platform == "darwin":
+            base = Path.home() / "Library" / "Application Support" / "Trader's Little Jedi"
+        elif sys.platform == "win32":
+            base = Path(os.environ.get("APPDATA", Path.home())) / "Trader's Little Jedi"
+        else:
+            base = Path(os.environ.get("XDG_CONFIG_HOME",
+                                       Path.home() / ".config")) / "traders-little-jedi"
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            base = Path.home()
+        return base / "config.json"
+    return Path(__file__).resolve().parent.parent / "config.json"
+
+
+CONFIG_PATH = _default_config_path()
 
 DEFAULTS: dict[str, Any] = {
     "flac_compression_level": 8,
