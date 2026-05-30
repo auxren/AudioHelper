@@ -242,9 +242,16 @@ class WaveformView(tk.Frame):
         self.canvas.bind("<ButtonPress-1>",   self._on_press)
         self.canvas.bind("<B1-Motion>",       self._on_drag)
         self.canvas.bind("<ButtonRelease-1>", self._on_release)
-        self.canvas.bind("<MouseWheel>",      self._on_wheel)
-        self.canvas.bind("<Button-4>",        self._on_wheel)
-        self.canvas.bind("<Button-5>",        self._on_wheel)
+        # Trackpad / wheel: plain scroll pans (traverse), modifier+scroll zooms
+        # (Tk on macOS has no native pinch event, so ⌘/Ctrl+scroll is the zoom
+        # gesture). Vertical and horizontal two-finger scroll both pan.
+        self.canvas.bind("<MouseWheel>",          self._on_scroll_pan)
+        self.canvas.bind("<Shift-MouseWheel>",    self._on_scroll_pan)
+        self.canvas.bind("<Command-MouseWheel>",  self._on_scroll_zoom)
+        self.canvas.bind("<Control-MouseWheel>",  self._on_scroll_zoom)
+        self.canvas.bind("<Button-4>",            self._on_scroll_pan)
+        self.canvas.bind("<Button-5>",            self._on_scroll_pan)
+        self._scrubbing = False
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -487,12 +494,33 @@ class WaveformView(tk.Frame):
         self._clamp_scroll()
         self._redraw()
 
-    def _on_wheel(self, event) -> None:
-        if event.num == 4 or (hasattr(event, "delta") and event.delta > 0):
-            factor = 1.3
-        else:
-            factor = 1 / 1.3
+    def _wheel_delta(self, event) -> float:
+        """Normalized wheel/scroll delta: + = up/right, - = down/left."""
+        if getattr(event, "num", None) == 4:
+            return 1.0
+        if getattr(event, "num", None) == 5:
+            return -1.0
+        d = getattr(event, "delta", 0)
+        # macOS deltas are small (±1..±3); Windows are ±120.
+        return d / 120.0 if abs(d) >= 30 else float(d)
+
+    def _on_scroll_pan(self, event) -> str:
+        """Two-finger scroll → traverse (pan) the waveform horizontally."""
+        if self._duration <= 0:
+            return "break"
+        delta = self._wheel_delta(event)
+        visible = self._canvas_w() / self._zoom
+        self._scroll_start -= delta * visible * 0.15
+        self._clamp_scroll()
+        self._redraw()
+        return "break"
+
+    def _on_scroll_zoom(self, event) -> str:
+        """⌘/Ctrl + scroll → zoom around the pointer (pinch substitute)."""
+        delta = self._wheel_delta(event)
+        factor = 1.25 if delta > 0 else 1 / 1.25
         self._zoom_around(factor, self._x_to_sec(event.x))
+        return "break"
 
     # ── Mouse interaction ─────────────────────────────────────────────────────
 
@@ -505,27 +533,35 @@ class WaveformView(tk.Frame):
     def _on_press(self, event) -> None:
         idx = self._nearest_marker(event.x)
         if idx is not None:
+            # Grab a marker to drag the track boundary.
             self._drag_idx = idx
             self.canvas.config(cursor="sb_h_double_arrow")
         else:
-            self._cursor = max(0.0, min(self._x_to_sec(event.x), self._duration))
-            self.lbl_time.configure(text=_fmt_time(self._cursor))
-            self._redraw()
-            if self.on_seek:
-                self.on_seek(self._cursor)
+            # Click empty waveform → scrub the playhead (and keep scrubbing on
+            # drag). Playback follows the cursor when you hit Play / space.
+            self._scrubbing = True
+            self._set_cursor_from_x(event.x)
+
+    def _set_cursor_from_x(self, x: float) -> None:
+        self._cursor = max(0.0, min(self._x_to_sec(x), self._duration))
+        self.lbl_time.configure(text=_fmt_time(self._cursor))
+        self._redraw()
+        if self.on_seek:
+            self.on_seek(self._cursor)
 
     def _on_drag(self, event) -> None:
-        if self._drag_idx is None:
-            return
-        new_t = max(0.1, min(self._x_to_sec(event.x), self._duration - 0.1))
-        i = self._drag_idx
-        if i > 0:
-            new_t = max(new_t, self._markers[i - 1] + 1.0)
-        if i < len(self._markers) - 1:
-            new_t = min(new_t, self._markers[i + 1] - 1.0)
-        self._markers[i] = new_t
-        self.lbl_time.configure(text=_fmt_time(new_t))
-        self._redraw()
+        if self._drag_idx is not None:
+            new_t = max(0.1, min(self._x_to_sec(event.x), self._duration - 0.1))
+            i = self._drag_idx
+            if i > 0:
+                new_t = max(new_t, self._markers[i - 1] + 1.0)
+            if i < len(self._markers) - 1:
+                new_t = min(new_t, self._markers[i + 1] - 1.0)
+            self._markers[i] = new_t
+            self.lbl_time.configure(text=_fmt_time(new_t))
+            self._redraw()
+        elif self._scrubbing:
+            self._set_cursor_from_x(event.x)
 
     def _on_release(self, event) -> None:
         if self._drag_idx is not None:
@@ -533,8 +569,90 @@ class WaveformView(tk.Frame):
                 self.on_marker_moved(self._drag_idx, self._markers[self._drag_idx])
             self._drag_idx = None
             self.canvas.config(cursor="crosshair")
+        self._scrubbing = False
 
     # ── Playback ──────────────────────────────────────────────────────────────
+
+    def play_from(self, sec: float) -> None:
+        """Move the playhead to *sec*, scroll it into view, and start playing."""
+        self.set_cursor(sec)
+        # Scroll so the cursor sits ~10% from the left edge.
+        if self._duration > 0:
+            self._scroll_start = max(0.0, sec - self._canvas_w() / self._zoom * 0.1)
+            self._clamp_scroll()
+            self._redraw()
+        self._play()
+
+    def toggle_play(self) -> None:
+        """Spacebar handler: stop if playing, else play from the cursor."""
+        if self._play_proc and self._play_proc.poll() is None:
+            self._stop()
+        elif self._samples:
+            self._play()
+
+    def detect_quiet_boundaries(self, target: int = 0,
+                                min_gap: float = 25.0,
+                                min_quiet: float = 0.6) -> list[float]:
+        """Find track boundaries from the decoded envelope — the points where
+        audio RESUMES after a quiet dip. Far more reliable for live recordings
+        than a fixed-dB silencedetect, because the threshold adapts to the
+        recording's own level (applause/crowd gaps are quiet *relative* to the
+        music, not absolutely silent).
+
+        Returns resume timestamps (each = start of the next track), filtered so
+        no two are closer than *min_gap* seconds.
+        """
+        n = len(self._samples)
+        if n == 0 or self._duration <= 0:
+            return []
+        sps = n / self._duration                    # envelope samples / sec
+        win = max(1, int(0.4 * sps))                # ~0.4 s smoothing
+        env = self._samples
+
+        # Smoothed envelope via a running mean (cheap prefix-sum).
+        prefix = [0.0] * (n + 1)
+        for i in range(n):
+            prefix[i + 1] = prefix[i] + env[i]
+        def smooth(i: int) -> float:
+            a = max(0, i - win); b = min(n, i + win)
+            return (prefix[b] - prefix[a]) / (b - a)
+
+        # Adaptive threshold: a fraction of the median level. Sample every few
+        # points for speed on long shows.
+        step = max(1, n // 20000)
+        sampled = sorted(smooth(i) for i in range(0, n, step))
+        if not sampled:
+            return []
+        median = sampled[len(sampled) // 2]
+        thresh = max(median * 0.18, 0.012)          # quiet = well below median
+        min_quiet_samples = int(min_quiet * sps)
+
+        boundaries: list[float] = []
+        i = 0
+        in_quiet = False
+        quiet_start = 0
+        while i < n:
+            s = smooth(i)
+            if s < thresh:
+                if not in_quiet:
+                    in_quiet = True
+                    quiet_start = i
+            else:
+                if in_quiet:
+                    in_quiet = False
+                    if i - quiet_start >= min_quiet_samples:
+                        # Resume point = where audio comes back.
+                        boundaries.append(round(i / sps, 2))
+                i += step          # coarse scan while loud
+                continue
+            i += 1
+
+        # Enforce a minimum gap between boundaries.
+        filtered: list[float] = []
+        for t in boundaries:
+            if not filtered or t - filtered[-1] >= min_gap:
+                filtered.append(t)
+        return filtered
 
     def _play(self) -> None:
         self._stop()
@@ -678,11 +796,29 @@ class ShowSplitterDialog(tk.Toplevel):
                                 anchor="w", relief="sunken", padding=(6, 2))
         self.status.pack(fill="x", side="bottom")
 
+        # Spacebar toggles play/stop (unless typing in an entry field).
+        self.bind_all("<space>", self._on_space)
+
         if initial_files:
             audio = [f for f in initial_files
                      if Path(f).suffix.lower() in AUDIO_EXTS]
             if audio:
                 self.after(80, lambda: self._load_audio(Path(audio[0])))
+
+    def _on_space(self, event) -> Optional[str]:
+        # Don't hijack space while the user is typing in a text field.
+        w = self.focus_get()
+        if isinstance(w, (tk.Entry, ttk.Entry, tk.Text, ttk.Combobox)):
+            return None
+        self.waveform.toggle_play()
+        return "break"
+
+    def destroy(self) -> None:
+        try:
+            self.unbind_all("<space>")
+        except Exception:
+            pass
+        super().destroy()
 
     # ── Toolbar ───────────────────────────────────────────────────────────────
 
@@ -770,6 +906,7 @@ class ShowSplitterDialog(tk.Toplevel):
         tv_sb.pack(side="right", fill="y")
         self.tv.pack(fill="both", expand=True)
         self.tv.bind("<<TreeviewSelect>>", self._on_row_select)
+        self.tv.bind("<ButtonRelease-1>", self._on_row_click)  # click → audition
 
         # Inline edit strip
         edit = ttk.Frame(right)
@@ -927,15 +1064,26 @@ class ShowSplitterDialog(tk.Toplevel):
         self._refresh_tv()
 
     def _run_silence_detect(self) -> None:
-        if not self._audio_path or self._duration <= 0:
+        if self._duration <= 0:
             return
+        # Use the decoded waveform envelope — adaptive, instant, and far more
+        # reliable for live shows than a fixed-dB ffmpeg silencedetect. Falls
+        # back to ffmpeg only if the waveform hasn't decoded yet.
+        ends = self.waveform.detect_quiet_boundaries()
+        if ends:
+            self._on_silences(ends, len(self._tracks))
+            return
+        if self.waveform._samples:
+            self.status.configure(
+                text="No clear gaps found. Try dragging markers, or lower the gap "
+                     "threshold by adding splits manually.")
+            return
+        # Waveform still decoding → fall back to ffmpeg pass.
         ffmpeg = get_tool("ffmpeg").path(self.config_obj)
         if not ffmpeg.exists():
-            messagebox.showerror("Show Splitter",
-                                 "ffmpeg not found. Install via Tools → Update all CLI tools.")
             return
         self.btn_silence.configure(state="disabled")
-        self.status.configure(text="Detecting silences… (may take a minute)")
+        self.status.configure(text="Detecting silences…")
         n = len(self._tracks)
 
         def _worker():
@@ -947,21 +1095,21 @@ class ShowSplitterDialog(tk.Toplevel):
     def _on_silences(self, ends: list[float], n_tracks: int) -> None:
         self.btn_silence.configure(state="normal")
         if not ends:
-            self.status.configure(text="No silences detected — adjust times manually.")
+            self.status.configure(text="No clear gaps found — adjust times manually.")
             return
         if not self._tracks:
+            # Build a fresh track list from the detected boundaries.
             self._tracks = [SplitTrack(i + 1, f"Track {i + 1:02d}", round(t, 2))
                             for i, t in enumerate([0.0] + ends)]
-            self._refresh_tv()
-            self._sync_markers()
-            self._update_split_btn()
-            self.status.configure(text=f"Created {len(self._tracks)} tracks from silences.")
-            return
-        self._apply_silence_boundaries(ends)
+        else:
+            self._apply_silence_boundaries(ends)
+        self._sort_tracks()
         self._sync_markers()
         self._refresh_tv()
+        self._update_split_btn()
         self.status.configure(
-            text=f"Applied {len(ends)} silence boundaries to {len(self._tracks)} tracks.")
+            text=f"Detected {len(ends)} gap(s) → {len(self._tracks)} track(s). "
+                 "Drag markers to fine-tune; click a track to audition its start.")
 
     def _apply_silence_boundaries(self, ends: list[float]) -> None:
         n = len(self._tracks)
@@ -989,17 +1137,29 @@ class ShowSplitterDialog(tk.Toplevel):
         times = [t.start_sec for t in self._tracks[1:]]  # exclude track 1 (always 0)
         self.waveform.set_markers(times)
 
+    def _sort_tracks(self) -> None:
+        """Keep tracks ordered by start time and renumbered 1..n, so a track's
+        number always matches its position in the show (track 2 can never sit
+        after track 3)."""
+        self._tracks.sort(key=lambda t: t.start_sec)
+        for i, t in enumerate(self._tracks, 1):
+            t.number = i
+
     def _on_marker_moved(self, marker_idx: int, new_time: float) -> None:
         """Called by WaveformView when user drags a marker."""
         track_idx = marker_idx + 1  # marker 0 = track 2
         if track_idx < len(self._tracks):
             self._tracks[track_idx].start_sec = round(new_time, 2)
+            self._sort_tracks()
             self._refresh_tv()
-            # Select that row
-            children = self.tv.get_children()
-            if track_idx < len(children):
-                self.tv.selection_set(children[track_idx])
-                self.tv.see(children[track_idx])
+            # Reselect the track now at this start time
+            for i, t in enumerate(self._tracks):
+                if abs(t.start_sec - round(new_time, 2)) < 0.001:
+                    children = self.tv.get_children()
+                    if i < len(children):
+                        self.tv.selection_set(children[i])
+                        self.tv.see(children[i])
+                    break
 
     def _on_waveform_seek(self, t: float) -> None:
         """Called when user clicks the waveform (sets cursor)."""
@@ -1020,6 +1180,8 @@ class ShowSplitterDialog(tk.Toplevel):
             self.tv.selection_set(children[sel_idx])
 
     def _on_row_select(self, _evt=None) -> None:
+        # Fires on user AND programmatic selection — just populate the edit
+        # fields and move the cursor (no playback, so marker drags don't play).
         sel = self.tv.selection()
         if not sel:
             return
@@ -1034,8 +1196,19 @@ class ShowSplitterDialog(tk.Toplevel):
             self.var_disc_edit.set(str(t.disc))
         finally:
             self._loading_row = False
-        # Scroll waveform to show this track's start
         self.waveform.set_cursor(t.start_sec)
+
+    def _on_row_click(self, event) -> None:
+        # An actual mouse click on a track row → audition it: play from that
+        # track's start marker. (ButtonRelease only fires on real clicks, not
+        # on programmatic selection, so dragging a marker won't trigger this.)
+        row = self.tv.identify_row(event.y)
+        if not row:
+            return
+        idx = self._iid_to_index(row)
+        if idx is None or idx >= len(self._tracks):
+            return
+        self.waveform.play_from(self._tracks[idx].start_sec)
 
     def _apply_edit(self) -> None:
         sel = self.tv.selection()
@@ -1056,6 +1229,7 @@ class ShowSplitterDialog(tk.Toplevel):
             t.disc = max(1, int(self.var_disc_edit.get()))
         except ValueError:
             pass
+        self._sort_tracks()   # an edited start time may reorder the tracks
         self._refresh_tv()
         self._sync_markers()
 

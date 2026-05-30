@@ -49,3 +49,37 @@ def test_nice_tick_scales():
     # ticks grow with the visible duration
     assert _nice_tick(8) <= _nice_tick(800)
     assert _nice_tick(10) > 0
+
+
+def test_envelope_silence_detection():
+    """detect_quiet_boundaries finds the gaps between 'songs' from the envelope.
+    Skips if tkinter can't create a root (headless CI without a display)."""
+    import math
+    import pytest
+    try:
+        import tkinter as tk
+        from audiohelper import theme as _t
+        root = tk.Tk()
+    except Exception:
+        pytest.skip("no display / tkinter root")
+    try:
+        _t.apply(root)
+        root.withdraw()
+        from audiohelper.show_splitter import WaveformView
+        wv = WaveformView(root)
+        dur, sps = 300.0, 100
+        n = int(dur * sps)
+        wv._duration = dur
+        env = []
+        for i in range(n):
+            t = i / sps
+            env.append(0.01 if (90 < t < 95 or 185 < t < 190)
+                       else abs(0.5 + 0.3 * math.sin(t * 5)))
+        wv._samples = env
+        b = wv.detect_quiet_boundaries(min_gap=25)
+        # Two resume points, near 95 s and 190 s
+        assert len(b) == 2
+        assert abs(b[0] - 95) < 3
+        assert abs(b[1] - 190) < 3
+    finally:
+        root.destroy()
