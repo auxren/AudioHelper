@@ -39,6 +39,23 @@ def _should_ignore(filename: str) -> bool:
     return any(p.search(filename) for p in _IGNORE_PATTERNS)
 
 
+def read_text_smart(p: "Path") -> str:
+    """Read a text file, trying UTF-8, then Windows-1252, then Latin-1.
+
+    Real-world eTree/info files are frequently saved in Windows-1252 (cp1252)
+    with smart quotes (’ “ ” – ). Decoding those as latin-1 turns them into
+    control characters (shown as �). cp1252 decodes them correctly.
+    """
+    data = p.read_bytes()
+    for enc in ("utf-8", "cp1252", "latin-1"):
+        try:
+            return data.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    # Last resort: never raise — replace undecodable bytes.
+    return data.decode("utf-8", errors="replace")
+
+
 # ── eTree data structures ─────────────────────────────────────────────────────
 
 @dataclass
@@ -72,8 +89,16 @@ class EtreeShow:
 # ── eTree parser ──────────────────────────────────────────────────────────────
 
 _KEY_RE   = re.compile(r'^(Artist|Date|Venue|Location|Source)\s*:\s*(.*)$', re.IGNORECASE)
-_SET_RE   = re.compile(r'^(Set\s*\d+|Encore\d*|E\d+)[\s:]*$', re.IGNORECASE)
+# Set / disc markers: "Set 1", "Disc 2", "CD 3", "Encore", "Encore 2", "E1"
+_SET_RE   = re.compile(r'^(Set\s*\d+|Disc\s*\d+|CD\s*\d+|Encore\s*\d*|E\d+)[\s:]*$', re.IGNORECASE)
 _TRACK_RE = re.compile(r'^(\d+)[.)]\s+(.*)$')
+
+# Embedded date inside a free-form header line, e.g.
+#   "The Rolling Stones 1999 06 08 Shepherds Bush Empire, London, UK"
+#   "Phish 1997-12-31 Madison Square Garden"
+_EMBEDDED_DATE_RE = re.compile(
+    r'\b((?:19|20)\d{2})[\s._/-](0?[1-9]|1[0-2])[\s._/-](0?[1-9]|[12]\d|3[01])\b'
+)
 
 
 def parse_etree_file(content: str) -> EtreeShow:
@@ -102,42 +127,105 @@ def parse_etree_file(content: str) -> EtreeShow:
     else:
         _parse_positional_header(show, header_raw)
 
-    # Parse sets and tracks from the body
+    # Decide setlist mode: if any line is a numbered track ("1. Title"), use
+    # strictly numbered parsing. Otherwise fall back to UNNUMBERED parsing,
+    # where bare title lines under a Set/Disc header become tracks. This keeps
+    # numbered files (which may have trailing junk like "*****" or a lineup)
+    # unaffected while still handling unnumbered eTree setlists.
+    numbered = any(_TRACK_RE.match(l.strip()) for l in body_lines)
+
     current_set: Optional[EtreeSet] = None
     global_idx = 0
+    stop_capture = False   # unnumbered mode: set once we hit lineup/source/notes
+    trailing: list[str] = []  # lines after the setlist (source/lineup/notes)
+
+    def _new_set(line: str) -> EtreeSet:
+        label = line.rstrip(':').strip()
+        label = re.sub(r'^set\s*(\d+)$',  lambda x: f"Set {x.group(1)}",  label, flags=re.IGNORECASE)
+        label = re.sub(r'^disc\s*(\d+)$', lambda x: f"Disc {x.group(1)}", label, flags=re.IGNORECASE)
+        label = re.sub(r'^cd\s*(\d+)$',   lambda x: f"Disc {x.group(1)}", label, flags=re.IGNORECASE)
+        label = re.sub(r'^encore\s*\d*$', 'Encore', label, flags=re.IGNORECASE)
+        s = EtreeSet(label=label)
+        show.sets.append(s)
+        return s
+
+    def _add_track(raw_title: str) -> None:
+        nonlocal global_idx, current_set
+        global_idx += 1
+        comment = ""
+        pm = re.search(r'\s*\(([^)]+)\)\s*$', raw_title)
+        if pm:
+            comment   = pm.group(1).strip()
+            raw_title = raw_title[:pm.start()].strip()
+        if current_set is None:
+            current_set = EtreeSet(label="Set 1")
+            show.sets.append(current_set)
+        set_idx = len(current_set.tracks) + 1
+        current_set.tracks.append(
+            EtreeTrack(global_index=global_idx, set_index=set_idx,
+                       title=raw_title, comment=comment))
+
     for raw in body_lines:
         line = raw.strip()
         if not line:
             continue
 
-        m = _SET_RE.match(line)
-        if m:
-            label = line.rstrip(':').strip()
-            label = re.sub(r'^set\s*(\d+)$',  lambda x: f"Set {x.group(1)}", label, flags=re.IGNORECASE)
-            label = re.sub(r'^encore\d*$', 'Encore', label, flags=re.IGNORECASE)
-            current_set = EtreeSet(label=label)
-            show.sets.append(current_set)
+        if _SET_RE.match(line):
+            current_set = _new_set(line)
+            stop_capture = False   # a new set header resumes capture
             continue
 
         m = _TRACK_RE.match(line)
         if m:
-            global_idx += 1
-            raw_title = m.group(2).strip()
-            comment = ""
-            pm = re.search(r'\s*\(([^)]+)\)\s*$', raw_title)
-            if pm:
-                comment   = pm.group(1).strip()
-                raw_title = raw_title[:pm.start()].strip()
-            if current_set is None:
-                current_set = EtreeSet(label="Set 1")
-                show.sets.append(current_set)
-            set_idx = len(current_set.tracks) + 1
-            current_set.tracks.append(
-                EtreeTrack(global_index=global_idx, set_index=set_idx,
-                           title=raw_title, comment=comment)
-            )
+            _add_track(m.group(2).strip())
+            continue
+
+        # Unnumbered mode: treat a bare line as a track unless it looks like
+        # the end of the setlist (lineup, source/lineage, key:value, divider).
+        if not numbered:
+            if not stop_capture and _is_setlist_terminator(line):
+                stop_capture = True
+            if stop_capture:
+                if not _DIVIDER_RE.match(line):
+                    trailing.append(line)
+                continue
+            _add_track(line)
+
+    # Fold any trailing post-setlist content (lineup, source, lineage, notes)
+    # into source/notes if the header didn't already supply them.
+    if trailing:
+        src_lines  = [l for l in trailing if _line_is_source(l)]
+        note_lines = [l for l in trailing if not _line_is_source(l)]
+        if src_lines and not show.source:
+            show.source = '\n'.join(src_lines).strip()
+        if note_lines and not show.notes:
+            show.notes = '\n'.join(note_lines).strip()
 
     return show
+
+
+# Lines that signal the setlist has ended (lineup credits, source/lineage,
+# key:value metadata, or a divider rule). Used only in unnumbered mode.
+_LINEUP_RE = re.compile(
+    r'\s[-–]\s.*\b(Guitar|Bass|Drums?|Vocals?|Keys?|Keyboards?|Piano|Organ|'
+    r'Violin|Fiddle|Trumpet|Trombone|Sax|Saxophone|Percussion|Mandolin|Banjo|'
+    r'Harmonica|Harp|Cello|Flute|Pedal\s+Steel|Lap\s+Steel|Synth)\b',
+    re.IGNORECASE,
+)
+_KV_PREFIX_RE = re.compile(r'^[A-Za-z][\w /]{1,24}:\s', )
+_DIVIDER_RE   = re.compile(r'^[\*\-=_~#]{3,}\s*$')
+
+
+def _is_setlist_terminator(line: str) -> bool:
+    if _DIVIDER_RE.match(line):
+        return True
+    if _KV_PREFIX_RE.match(line):
+        return True
+    if _LINEUP_RE.search(line):
+        return True
+    if _line_is_source(line):
+        return True
+    return False
 
 
 def _parse_kv_header(show: EtreeShow, nonblank_lines: list[str]) -> None:
@@ -198,22 +286,39 @@ def _parse_positional_header(show: EtreeShow, raw_lines: list[str]) -> None:
     if not nonblank:
         return
 
-    show.artist = nonblank[0]
+    # First try: a single line that jams artist + date + venue together, e.g.
+    #   "The Rolling Stones 1999 06 08 Shepherds Bush Empire, London, UK"
+    # If line 1 has an embedded date, split around it and consume only line 1
+    # as the header — everything else is notes/source.
+    header_consumed = 1
+    dm = _EMBEDDED_DATE_RE.search(nonblank[0])
+    if dm:
+        y, mo, dy = dm.group(1), dm.group(2), dm.group(3)
+        show.date = f"{y}-{int(mo):02d}-{int(dy):02d}"
+        before = nonblank[0][:dm.start()].strip(" -,")
+        after  = nonblank[0][dm.end():].strip(" -,")
+        if before:
+            show.artist = before
+        if after:
+            _split_venue_location(show, after)
+    else:
+        # Classic positional format: line1=Artist, line2=Date, line3=Venue,
+        # and optionally line4=Location ("City, ST" / "City, Country").
+        show.artist = nonblank[0]
+        if len(nonblank) >= 2:
+            show.date = nonblank[1]
+        if len(nonblank) >= 3:
+            _split_venue_location(show, nonblank[2])
+        header_consumed = 3
+        # If venue didn't itself carry a location and the next line looks like
+        # "City, State" — a comma-separated short line that isn't a source/
+        # lineage line — treat it as the location.
+        if (not show.location and len(nonblank) >= 4
+                and _looks_like_location(nonblank[3])):
+            show.location = nonblank[3]
+            header_consumed = 4
 
-    if len(nonblank) >= 2:
-        show.date = nonblank[1]
-
-    if len(nonblank) >= 3:
-        venue_line = nonblank[2]
-        # Split "Venue Name - City, ST" on the last " - " if the right side looks like a location
-        parts = venue_line.rsplit(' - ', 1)
-        if len(parts) == 2 and re.search(r'.+,\s*\S', parts[1]):
-            show.venue    = parts[0].strip()
-            show.location = parts[1].strip()
-        else:
-            show.venue = venue_line.strip()
-
-    # Skip the first 3 positional lines, then classify everything else by content.
+    # Classify remaining lines (after the consumed header) into source vs notes.
     skipped = 0
     past_header = False
     source_lines: list[str] = []
@@ -224,7 +329,7 @@ def _parse_positional_header(show: EtreeShow, raw_lines: list[str]) -> None:
         if not past_header:
             if line:
                 skipped += 1
-                if skipped == 3:
+                if skipped == header_consumed:
                     past_header = True
             continue
         if not line:
@@ -236,6 +341,38 @@ def _parse_positional_header(show: EtreeShow, raw_lines: list[str]) -> None:
 
     show.source = '\n'.join(source_lines).strip()
     show.notes  = '\n'.join(note_lines).strip()
+
+
+def _looks_like_location(line: str) -> bool:
+    """True if *line* looks like a 'City, ST' / 'City, Country' location."""
+    if ',' not in line:
+        return False
+    if _line_is_source(line):
+        return False
+    # Short, comma-separated, no signal-chain or key:value markers.
+    if ' > ' in line or ':' in line:
+        return False
+    return len(line.split()) <= 6
+
+
+def _split_venue_location(show: EtreeShow, text: str) -> None:
+    """Split 'Venue - City, ST' or 'Venue, City, Country' into venue + location."""
+    # "Venue Name - City, ST" → split on last " - "
+    parts = text.rsplit(' - ', 1)
+    if len(parts) == 2 and re.search(r'.+,\s*\S', parts[1]):
+        show.venue    = parts[0].strip()
+        show.location = parts[1].strip()
+        return
+    # "Venue, City, State/Country" → first chunk is venue, rest is location
+    chunks = [c.strip() for c in text.split(',')]
+    if len(chunks) >= 3:
+        show.venue    = chunks[0]
+        show.location = ', '.join(chunks[1:])
+    elif len(chunks) == 2:
+        show.venue    = chunks[0]
+        show.location = chunks[1]
+    else:
+        show.venue = text.strip()
 
 
 def generate_etree_file(show: EtreeShow) -> str:
@@ -431,10 +568,7 @@ class LiveTaggerDialog(tk.Toplevel):
 
     def _load_txt_path(self, p: Path) -> None:
         try:
-            try:
-                content = p.read_text(encoding="utf-8")
-            except UnicodeDecodeError:
-                content = p.read_text(encoding="latin-1")
+            content = read_text_smart(p)
         except OSError as e:
             messagebox.showerror("Live Show Tagger", f"Could not read {p.name}:\n{e}")
             return

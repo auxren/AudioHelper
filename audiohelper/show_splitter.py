@@ -23,7 +23,7 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Optional
 
 from .action_picker import AUDIO_EXTS
-from .live_tagger import EtreeShow, parse_etree_file
+from .live_tagger import EtreeShow, parse_etree_file, read_text_smart
 from .tc_sources import detect_source
 from .tc_tagger import mutagen_available, write_tags as mutagen_write_tags
 from .tools import get_tool
@@ -891,9 +891,7 @@ class ShowSplitterDialog(tk.Toplevel):
 
     def _load_txt_path(self, p: Path) -> None:
         try:
-            content = p.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            content = p.read_text(encoding="latin-1")
+            content = read_text_smart(p)
         except OSError as e:
             messagebox.showerror("Show Splitter", f"Cannot read {p.name}:\n{e}")
             return

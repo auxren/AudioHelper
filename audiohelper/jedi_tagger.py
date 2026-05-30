@@ -26,6 +26,7 @@ from .live_tagger import (
     _should_ignore,
     generate_etree_file,
     parse_etree_file,
+    read_text_smart,
 )
 from .tc_sources import detect_source
 from .tc_tagger import mutagen_available, write_tags as mutagen_write_tags
@@ -927,10 +928,7 @@ class JediTaggerDialog(tk.Toplevel):
 
     def _load_txt_path(self, p: Path) -> None:
         try:
-            try:
-                content = p.read_text(encoding="utf-8")
-            except UnicodeDecodeError:
-                content = p.read_text(encoding="latin-1")
+            content = read_text_smart(p)
         except OSError as e:
             messagebox.showerror("Live Show Tagger", f"Could not read {p.name}:\n{e}")
             return
