@@ -9,7 +9,7 @@ the Python 3.11+ / tkinter desktop app in `audiohelper/`.
 ## Run & test
 ```bash
 python3 TradersLittleJedi.py     # run from source (needs tkinter, mutagen, ffmpeg/flac)
-bash run_tests.sh                # 72 headless pytest tests
+bash run_tests.sh                # 80 headless pytest tests
 bash build_mac.sh --skip-sign --skip-notarize   # build a local .app/.dmg
 ```
 The dev virtual environment is `.venv/` (created by `install_mac.sh` or the

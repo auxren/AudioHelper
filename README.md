@@ -60,15 +60,26 @@ live-recording workflow.
 
 ### ✂ Show Splitter
 Turn one full-show WAV/FLAC into individual, tagged tracks.
-- Loads the recording and draws an **interactive waveform** — zoom (mouse wheel
-  or +/−/Fit), scroll, and click to set the playback cursor.
-- **▶ Play** previews from the cursor through your chosen **audio output device**
-  (handy when your DAC isn't the system default).
-- **Drag the orange markers** to place track boundaries, or click **Detect
-  silences** to auto-propose them, or **Load setlist…** to pull titles from an
-  eTree `.txt`.
+- Loads the recording and draws an **interactive waveform**. Navigate with the
+  trackpad/mouse: **scroll = zoom**, **shift-scroll = pan**, **click/drag = scrub**
+  the playhead (plus +/−/Fit buttons).
+- **▶ Play** / **Spacebar** previews from the cursor through your chosen **audio
+  output device** (handy when your DAC isn't the system default). Click any track
+  row to **audition** it from that marker.
+- Place track boundaries three ways: **drag the orange markers**, click **Detect
+  silences** (adaptive envelope detection that finds the gaps between songs in a
+  live recording), or **Load setlist…** to pull titles from an eTree `.txt`.
+  Tracks always stay ordered by start time.
+- **Filename template** with eTree-style tokens (default `%a%dd%Dt%n` →
+  `alo2026-05-24d1t01.flac`): `%a` artist abbrev · `%d` date · `%D` set/disc ·
+  `%n` track # · `%t` title. A **?** button explains them; a live preview shows
+  the result. The artist abbreviation is auto-guessed (gd, ph, bruce, glaf…).
+- **Save session… / Load session…** — store the markers, titles, metadata, and
+  template in a small, hand-editable `.tljsplit` text file you can reopen and
+  refine later.
 - **Split & Tag** writes one FLAC/WAV/MP3 per track, fully tagged (artist, date,
-  venue, source, title, per-disc track numbers).
+  venue, source, title, per-disc track numbers). Album name format:
+  `DATE Venue, City, State` (e.g. `2026-05-24 HopMonk Tavern, Novato, CA`).
 
 ### ♪ Live Show Tagger
 Tag one show, foo_tradersfriend-style but cross-platform.
@@ -120,8 +131,33 @@ deliberately forgiving and handles:
 - **Numbered** setlists (`1. Song`) and **unnumbered** ones (bare titles under a
   `Set 1:` / `Disc 2:` / `Encore:` header)
 - **Multi-disc** shows (`Disc 1:` / `CD 2:`) with continuous track numbering
+- **US-format dates** (`ALO 5/24/26`) and **repeated header blocks** between sets
+- **Footnotes** (`*ASHER`, `LAUNDRY*`) folded into notes / stripped from titles
 - UTF-8, UTF-16 (BOM or not), and Windows-1252 encodings
 - Trailing lineup/source/notes after the setlist
+
+Ripper/player logs (EAC, foobar2000, XLD, dBpoweramp) are detected and ignored
+so they're never mistaken for a setlist.
+
+## Session files (`.tljsplit`)
+
+The Show Splitter can save/restore a session — the audio path, show metadata,
+output format, filename template, and every track marker — as a small,
+human-editable text file:
+```
+source   = /Tapes/2026-05-24/.../alo...caf
+artist   = ALO
+date     = 2026-05-24
+abbrev   = alo
+template = %a%dd%Dt%n
+
+[tracks]
+      0:00 | 1 | KC Intro
+    4:19.2 | 1 | Animal Liberation 1 & 2
+   11:38.3 | 1 | Blank Canvas
+```
+Edit times/titles in any text editor and reload, or hand it to someone else to
+finish.
 
 ---
 
@@ -149,12 +185,13 @@ and a Windows `.exe` installer via PyInstaller.
 ## Development
 
 ```bash
-bash run_tests.sh          # 72 headless tests (pytest)
+bash run_tests.sh          # 80 headless tests (pytest)
 pip install -r requirements-dev.txt
 ```
 Tests cover the eTree parser, encoding/log detection, source detection, bulk
-inference, tag read/write, and tool-path resolution. Audio-touching tests skip
-automatically when ffmpeg/mutagen aren't present.
+inference, tag read/write, tool-path resolution, filename templates, session
+round-trips, and the silence detector. Audio-touching tests skip automatically
+when ffmpeg/mutagen aren't present.
 
 Project layout:
 ```
