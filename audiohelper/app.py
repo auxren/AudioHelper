@@ -277,27 +277,30 @@ class MainWindow(_BaseTk):  # type: ignore[misc,valid-type]
         grid.pack(fill="both", expand=True, padx=14, pady=(0, 14))
 
         TILES = [
-            # Row 0 — primary audio tools
-            ("✂", "Show Splitter",    "Split a full-show WAV/FLAC\ninto individual tracks",
+            # Row 0 — tagging & splitting (the core live-recording workflow)
+            ("✂", "Show Splitter",     "Split a full-show WAV/FLAC\ninto individual tracks",
              self._open_show_splitter, _theme.DEAD_PURPLE),
-            ("♪", "Live Show Tagger", "Tag files from eTree\nsetlist text files",
-             self._open_jedi_tagger,  _theme.DEAD_BLUE),
-            ("⇄", "Batch Convert",    "Convert many files with presets\nFLAC · WAV · MP3 · AAC · Ogg",
+            ("♪", "Live Show Tagger",  "Tag one show from an eTree\nsetlist text file",
+             self._open_jedi_tagger,   _theme.DEAD_BLUE),
+            ("⊛", "Bulk Tag Cleanup",  "Scan a whole library and\nauto-clean every show's tags",
+             self._open_bulk_tagger,   _theme.DEAD_PINK),
+            # Row 1 — conversion & editing
+            ("⇄", "Batch Convert",     "Convert many files with presets\nFLAC · WAV · MP3 · AAC · Ogg",
              self._open_batch_convert, _theme.DEAD_ORANGE),
-            ("✎", "Audio Editor",     "Waveform editor, trim,\nsplit, gapless merge",
-             self._open_audio_editor, _theme.DEAD_GREEN),
-            # Row 1 — utilities
-            ("✓", "Checksums",        "Create & verify\nMD5 · FFP · SFV · CFP · ST5",
-             self._open_create_chk,   _theme.DEAD_BLUE),
-            ("⬡", "Torrents",         "Create and verify\ntorrent files",
+            ("✎", "Audio Editor",      "Waveform editor, trim,\nsplit, gapless merge",
+             self._open_audio_editor,  _theme.DEAD_GREEN),
+            ("✓", "Checksums",         "Create & verify\nMD5 · FFP · SFV · CFP · ST5",
+             self._open_create_chk,    _theme.DEAD_BLUE),
+            # Row 2 — utilities
+            ("⬡", "Torrents",          "Create and verify\ntorrent files",
              self._open_create_torrent, _theme.DEAD_PURPLE),
-            ("◎", "Analysis",         "File details, integrity tests,\nReplayGain, SBE check",
-             self._open_analysis_menu, _theme.DEAD_PINK),
-            ("⊞", "More Tools",       "DSD edit, batch rename,\nstrip headers, repair",
-             self._open_more_menu,    _theme.DEAD_YELLOW),
+            ("◎", "Analysis",          "File details, integrity tests,\nReplayGain, SBE check",
+             self._open_analysis_menu, _theme.DEAD_YELLOW),
+            ("⊞", "More Tools",        "DSD edit, batch rename,\nstrip headers, repair",
+             self._open_more_menu,     _theme.DEAD_GREEN),
         ]
 
-        cols = 4
+        cols = 3
         for i, (icon, title, desc, cmd, accent) in enumerate(TILES):
             row, col = divmod(i, cols)
             tile = _ToolTile(grid, icon, title, desc, cmd, accent)
@@ -305,8 +308,8 @@ class MainWindow(_BaseTk):  # type: ignore[misc,valid-type]
 
         for c in range(cols):
             grid.columnconfigure(c, weight=1, uniform="col")
-        grid.rowconfigure(0, weight=1)
-        grid.rowconfigure(1, weight=1)
+        for r in range(3):
+            grid.rowconfigure(r, weight=1)
 
     # ----- geometry -----
 
@@ -498,6 +501,10 @@ class MainWindow(_BaseTk):  # type: ignore[misc,valid-type]
     def _open_batch_convert(self) -> None:
         from .batch_convert import BatchConvertDialog
         BatchConvertDialog(self, self.config_obj, self.runner)
+
+    def _open_bulk_tagger(self) -> None:
+        from .bulk_tagger import BulkTaggerDialog
+        BulkTaggerDialog(self, self.config_obj, self.runner)
 
     def _open_analysis_menu(self) -> None:
         """Open a quick-picker for Analysis tools."""
