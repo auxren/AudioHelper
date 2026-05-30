@@ -2,7 +2,7 @@
 # Trader's Little Jedi — macOS installer
 # Run from the AudioHelper folder:  bash install_mac.sh
 
-set -euo pipefail
+set -eo pipefail
 
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_NAME="Trader's Little Jedi"
@@ -35,24 +35,34 @@ fi
 ok "Homebrew $(brew --version | head -1)"
 
 # ─── Step 2: Python with tkinter ─────────────────────────────────────────────
-step "Checking Python + tkinter…"
+step "Checking Python + tkinter..."
 
-# Detect which python-tk version to install (matches the python3 brew formula)
-PY_FORMULA=$(brew list --formula 2>/dev/null | grep -E '^python@[0-9.]+$' | sort -V | tail -1)
+# Find the highest python@X.Y formula already installed via brew.
+# 'grep' may return nothing (exit 1) so we use '|| true' to avoid killing
+# the script under 'set -eo pipefail'.
+PY_FORMULA=$(brew list --formula 2>/dev/null | grep -E '^python@[0-9.]+$' | sort -V | tail -1 || true)
 if [[ -z "$PY_FORMULA" ]]; then
     PY_FORMULA="python@3.13"
 fi
-TK_FORMULA="python-tk@${PY_FORMULA#python@}"
+PY_VERSION="${PY_FORMULA#python@}"   # e.g. "3.14"
+TK_FORMULA="python-tk@${PY_VERSION}"
 
-if ! brew list "$TK_FORMULA" &>/dev/null; then
-    warn "Installing $TK_FORMULA…"
-    brew install "$TK_FORMULA"
+if ! brew list "$TK_FORMULA" &>/dev/null 2>&1; then
+    warn "Installing $TK_FORMULA..."
+    brew install "$TK_FORMULA" || {
+        warn "$TK_FORMULA not available; trying generic python-tk..."
+        brew install python-tk || true
+    }
 fi
-ok "$TK_FORMULA installed."
+ok "$TK_FORMULA present."
 
-# Find the python3 that matches the brew formula
-PYTHON3=$(brew --prefix "$PY_FORMULA")/bin/python3 2>/dev/null || true
-if [[ ! -x "$PYTHON3" ]]; then
+# Find the matching python3 binary
+PYTHON3=""
+if brew --prefix "$PY_FORMULA" &>/dev/null 2>&1; then
+    CANDIDATE="$(brew --prefix "$PY_FORMULA")/bin/python3"
+    [[ -x "$CANDIDATE" ]] && PYTHON3="$CANDIDATE"
+fi
+if [[ -z "$PYTHON3" ]]; then
     PYTHON3=$(command -v python3 || true)
 fi
 if [[ -z "$PYTHON3" ]]; then
@@ -63,12 +73,12 @@ fi
 PY_VER=$("$PYTHON3" --version 2>&1)
 ok "$PYTHON3  ($PY_VER)"
 
-# Quick tkinter sanity check
+# Verify tkinter is importable
 if ! "$PYTHON3" -c "import tkinter" 2>/dev/null; then
-    warn "tkinter still not importable — trying brew link…"
+    warn "tkinter not importable -- trying brew link..."
     brew link --force "$TK_FORMULA" 2>/dev/null || true
     if ! "$PYTHON3" -c "import tkinter" 2>/dev/null; then
-        fail "tkinter import failed. Please report this at https://github.com/auxren/AudioHelper/issues"
+        fail "tkinter import failed. Please file an issue at https://github.com/auxren/AudioHelper/issues"
         exit 1
     fi
 fi
