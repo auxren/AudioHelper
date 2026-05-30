@@ -22,6 +22,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Optional
 
+from . import theme as _t
 from .action_picker import AUDIO_EXTS
 from .live_tagger import EtreeShow, parse_etree_file, read_text_smart
 from .tc_sources import detect_source
@@ -192,38 +193,33 @@ class WaveformView(tk.Frame):
         self._build()
 
     def _build(self) -> None:
-        # Transport bar
+        # Transport bar. Use ttk.Buttons so they pick up the app's dark theme —
+        # raw tk.Buttons render as unreadable near-white widgets on macOS Aqua.
         tr = tk.Frame(self, bg=self.BG_COLOR)
-        tr.pack(fill="x", side="bottom", padx=4, pady=(0, 2))
-        self.btn_play = tk.Button(tr, text="▶ Play", width=8,
-                                  command=self._play, state="disabled",
-                                  bg="#2a2a3a", fg="#dddddd",
-                                  activebackground="#3a3a4a",
-                                  relief="flat", padx=6)
+        tr.pack(fill="x", side="bottom", padx=4, pady=(2, 2))
+        self.btn_play = ttk.Button(tr, text="▶ Play", width=8,
+                                   command=self._play, state="disabled")
         self.btn_play.pack(side="left", padx=(0, 2))
-        self.btn_stop = tk.Button(tr, text="Stop", width=5,
-                                  command=self._stop, state="disabled",
-                                  bg="#2a2a3a", fg="#dddddd",
-                                  activebackground="#3a3a4a",
-                                  relief="flat")
+        self.btn_stop = ttk.Button(tr, text="■ Stop", width=7,
+                                   style="Ghost.TButton",
+                                   command=self._stop, state="disabled")
         self.btn_stop.pack(side="left", padx=(0, 8))
-        self.lbl_time = tk.Label(tr, text="0:00:00", fg="#cccccc",
-                                 bg=self.BG_COLOR, font=("Consolas", 10),
+        self.lbl_time = tk.Label(tr, text="0:00:00", fg=_t.FG_PRIMARY,
+                                 bg=self.BG_COLOR, font=("Consolas", 11),
                                  width=10, anchor="w")
         self.lbl_time.pack(side="left")
-        self._zoom_btns: list[tk.Button] = []
+        self._zoom_btns: list[ttk.Button] = []
         for label, cmd in (("Fit", self._zoom_fit),
-                            ("-",   self._zoom_out),
+                            ("−",   self._zoom_out),
                             ("+",   self._zoom_in)):
-            b = tk.Button(tr, text=label, command=cmd, state="disabled",
-                          bg="#2a2a3a", fg="#dddddd",
-                          activebackground="#3a3a4a",
-                          relief="flat", width=4 if label == "Fit" else 3)
+            b = ttk.Button(tr, text=label, command=cmd, state="disabled",
+                           style="Ghost.TButton",
+                           width=4 if label == "Fit" else 3)
             b.pack(side="right", padx=1)
             self._zoom_btns.append(b)
 
         # Audio output device selector
-        tk.Label(tr, text="Out:", fg="#9999C0", bg=self.BG_COLOR,
+        tk.Label(tr, text="Out:", fg=_t.FG_SECONDARY, bg=self.BG_COLOR,
                  font=("Segoe UI", 9)).pack(side="right", padx=(16, 2))
         self._device_var = tk.StringVar(value="System default")
         self._device_menu = ttk.Combobox(
