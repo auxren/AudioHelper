@@ -10,10 +10,11 @@ from .tools import get_tool
 
 
 AUDIO_EXTS = {".wav", ".bwf", ".flac", ".mp3", ".ape", ".shn", ".aac", ".m4a",
-              ".ogg", ".wv", ".tta", ".aiff", ".aif", ".dff", ".dsf", ".wma"}
+              ".ogg", ".wv", ".tta", ".aiff", ".aif", ".dff", ".dsf", ".wma",
+              ".caf", ".opus", ".mka", ".mkv"}
 DSD_EXTS = {".dff", ".dsf"}
 LOSSLESS_EXTS = {".wav", ".bwf", ".flac", ".ape", ".shn", ".wv", ".tta",
-                 ".aiff", ".aif", ".dff", ".dsf"}
+                 ".aiff", ".aif", ".dff", ".dsf", ".caf"}
 CHK_EXTS = {".md5", ".sfv", ".ffp", ".sha1", ".sha256"}
 TORRENT_EXTS = {".torrent"}
 
