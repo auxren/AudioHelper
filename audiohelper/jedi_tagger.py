@@ -424,6 +424,21 @@ class JediTaggerDialog(tk.Toplevel):
         self.txt_notes.pack(fill="both", expand=True)
 
     def _build_cover_art_tab(self, parent: tk.Widget) -> None:
+        # ── Embedded cover preview (read from the loaded files) ──────────────
+        self._embedded_cover_img = None  # keep a ref so it isn't GC'd
+        emb = ttk.LabelFrame(parent, text="Embedded cover (from files)", padding=6)
+        emb.pack(fill="x", pady=(0, 6))
+        self._emb_thumb = ttk.Label(emb, text="(scanning…)", foreground="gray",
+                                    width=12, anchor="center")
+        self._emb_thumb.pack(side="left", padx=(0, 8))
+        self._emb_info = ttk.Label(emb, text="No files loaded yet.",
+                                   foreground="gray", justify="left")
+        self._emb_info.pack(side="left", fill="x", expand=True)
+
+        ttk.Separator(parent, orient="horizontal").pack(fill="x", pady=(0, 6))
+        ttk.Label(parent, text="Add or replace cover art:",
+                  foreground="gray").pack(anchor="w", pady=(0, 2))
+
         # One row per cover type
         self._cover_path_labels: dict[int, ttk.Label] = {}
         self._cover_thumb_labels: dict[int, ttk.Label] = {}
@@ -713,12 +728,22 @@ class JediTaggerDialog(tk.Toplevel):
                     "TRACKNUMBER": tags.get("TRACKNUMBER", ""),
                     "DISCNUMBER":  tags.get("DISCNUMBER", ""),
                 }
-            if i == 0 and not new_only:
+            # Capture the first file's tags as the sample for common fields.
+            # _apply_common_sample only fills *empty* fields, so this never
+            # clobbers user edits or values loaded from a setlist text file —
+            # it just surfaces embedded tags (ALBUM, ARTIST, COMMENT, etc.)
+            # that the file already carries. Previously this only ran on the
+            # manual "Reload tags" button, so adding a folder left the Show
+            # Data fields blank even when the files were fully tagged.
+            if i == 0:
                 common_sample = tags
         if common_sample:
             self.after(0, lambda: self._apply_common_sample(common_sample))
         else:
             self.after(0, lambda: self._on_file_select())
+        # Read & display the embedded cover from the first file, if any.
+        if files:
+            self.after(0, lambda: self._load_embedded_cover(Path(files[0])))
 
     def _apply_common_sample(self, sample: dict[str, str]) -> None:
         for key, var in self._common_vars.items():
@@ -941,6 +966,67 @@ class JediTaggerDialog(tk.Toplevel):
             lbl.configure(image=photo, text="")
         except Exception as e:
             lbl.configure(text=f"(err: {e})", image="")
+
+    def _load_embedded_cover(self, audio_path: Path) -> None:
+        """Extract and preview the embedded cover from *audio_path*, if present.
+
+        Works for FLAC PICTURE blocks (even when ffprobe doesn't flag the
+        stream as attached_pic — XLD-tagged files do this), MP3 APIC, M4A
+        cover atoms, etc. Uses ffmpeg to dump the first video/image stream.
+        """
+        if not hasattr(self, "_emb_thumb"):
+            return
+        ffmpeg = get_tool("ffmpeg").path(self.config_obj)
+        if not ffmpeg.exists():
+            self._emb_info.configure(text="ffmpeg not found — cannot read cover.")
+            return
+        self._emb_thumb.configure(text="(scanning…)", image="")
+        self._emb_info.configure(text=f"Reading cover from {audio_path.name}…")
+
+        def _worker():
+            import tempfile
+            tmp = Path(tempfile.gettempdir()) / "_tlj_embcover.jpg"
+            # -map 0:v? grabs any embedded picture/video stream (the cover).
+            rc = subprocess.run(
+                [str(ffmpeg), "-y", "-hide_banner", "-i", str(audio_path),
+                 "-map", "0:v:0", "-frames:v", "1", str(tmp)],
+                capture_output=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            ok = rc.returncode == 0 and tmp.exists() and tmp.stat().st_size > 0
+            self.after(0, lambda: self._show_embedded_cover(ok, tmp))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _show_embedded_cover(self, ok: bool, tmp: Path) -> None:
+        if not ok:
+            self._emb_thumb.configure(text="(none)", image="")
+            self._emb_info.configure(
+                text="No embedded cover found in these files.")
+            return
+        # We have a cover — wire it into the Front Cover slot so it's preserved
+        # on save, and show a preview.
+        if not _PIL_AVAILABLE:
+            self._emb_thumb.configure(text="✓ has\ncover", image="")
+            self._emb_info.configure(
+                text="Embedded cover detected (install Pillow to preview).\n"
+                     "It will be preserved when you Apply tags with "
+                     "'Keep existing covers'.")
+            return
+        try:
+            im = Image.open(tmp)
+            w, h = im.size
+            im.thumbnail((96, 96))
+            photo = ImageTk.PhotoImage(im)
+            self._embedded_cover_img = photo
+            self._emb_thumb.configure(image=photo, text="")
+            self._emb_info.configure(
+                text=f"Embedded front cover:  {w}×{h} px\n"
+                     "Kept automatically when you Apply tags with\n"
+                     "'Keep existing covers' (the default).")
+        except Exception as e:
+            self._emb_thumb.configure(text="✓ has\ncover", image="")
+            self._emb_info.configure(text=f"Embedded cover detected (preview error: {e})")
 
     # ── Auto-number / Titles from filenames ───────────────────────────────────
 
