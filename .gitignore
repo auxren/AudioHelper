@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*.pycache
+.DS_Store
+*.lnk
+
+# Bundled Windows CLI binaries (downloaded by Tools → Update all CLI tools)
+tools/*.exe
+tools/*.dll
+tools/*.pdf
+
+# User config (contains local paths)
+config.json

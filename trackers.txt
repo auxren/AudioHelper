@@ -1,0 +1,10 @@
+# Audio Helper — tracker list
+# One announce URL per line.
+# Lines starting with # are comments and are ignored.
+# Edit this file directly or use Torrent → Create torrent file → Edit…
+
+http://bt.etree.org:6969/announce
+udp://tracker.opentrackr.org:1337/announce
+udp://tracker.openbittorrent.com:6969/announce
+udp://exodus.desync.com:6969/announce
+udp://open.stealth.si:80/announce
