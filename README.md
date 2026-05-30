@@ -1,116 +1,187 @@
 # Trader's Little Jedi
 
-Audio toolkit for live music traders and tapers — encoding, checksums, torrents, and a full **Live Show Tagger** with eTree/furthur-style setlist support.
+A cross-platform desktop toolkit for live-music traders, tapers, and archivists.
+It splits full-show recordings into tracks, tags them from eTree/furthur setlist
+files, cleans up tags across a whole library, converts formats in bulk, and
+handles the usual trader chores — checksums, torrents, integrity tests, and
+ReplayGain — all from one dark-themed home screen.
+
+Built in Python + tkinter. Modeled on Trader's Little Helper, with ideas borrowed
+from XLD, XACT, and foo_tradersfriend.
 
 ---
 
 ## Install
 
-### Windows
-
-1. Download and unzip this repository
-2. Double-click **`Install Windows.bat`**
-3. Follow the prompts — Python, ffmpeg, flac, and all dependencies are installed automatically
-4. A shortcut appears on your Desktop when done
-
-> Requires Windows 10 or 11. The installer uses `winget` (built into Windows) and downloads ~90 MB of CLI tools on first run.
-
----
+The app launches from a **home screen of tool tiles** — no hunting through menus.
 
 ### macOS
 
-1. Download and unzip this repository
-2. Open Terminal, `cd` to the AudioHelper folder, and run:
-   ```bash
-   bash install_mac.sh
-   ```
-3. Follow the prompts — Homebrew, Python with tkinter, ffmpeg, and flac are installed automatically
-4. A launcher appears on your Desktop and in `/Applications` when done
+**Option A — prebuilt app (easiest):**
+Open `dist/TradersLittleJedi-mac.dmg` (after a build, see [BUILD.md](BUILD.md)),
+drag **Trader's Little Jedi** to Applications, then right-click → **Open** the
+first time (required for unsigned builds; a signed build opens normally).
+
+**Option B — install script (sets up everything):**
+```bash
+bash install_mac.sh
+```
+Installs Homebrew (if needed), Python with tkinter, ffmpeg, and flac, creates a
+virtual environment, and adds a launcher to your Desktop and `/Applications`.
 
 > Requires macOS 12 Monterey or later.
 
----
+### Windows
 
-## What it does
+Double-click **`Install Windows.bat`**. It installs Python (via `winget` if
+missing), the Python packages, and downloads ffmpeg + flac into `tools\`, then
+creates a Desktop shortcut.
 
-| Feature | Menu |
-|---|---|
-| Encode WAV → FLAC / APE / MP3 / SHN | Format |
-| Re-encode, decode, convert formats | Format |
-| Gapless merge, audio editor / splitter | Format |
-| Create & verify checksums (MD5, FFP, SFV, CFP, ST5) | Checksum |
-| Create & verify torrent files | Torrent |
-| Show file details (MediaInfo), test integrity | Analysis |
-| Check & fix sector boundary errors | Analysis / Tools |
-| Test WAV files for hidden MP3 source | Analysis |
-| ReplayGain scan | Analysis |
-| **Live Show Tagger** — tag from eTree text files | Tools |
-| **Show Splitter** — split a full-show WAV into tracks | Tools |
-| Batch rename | Tools |
-| Strip / repair audio file headers | Tools |
+> Requires Windows 10 or 11.
 
----
-
-## Show Splitter
-
-The Show Splitter lets you take a single WAV or FLAC recording of an entire show and cut it into individual tracks:
-
-1. **Tools → Show Splitter (WAV → tracks)…**
-2. Load your full-show WAV or FLAC
-3. Load the eTree setlist `.txt` file — track titles populate automatically
-4. Click **Detect silences** — the app finds quiet gaps between songs and proposes split points
-5. Review and adjust start times by clicking any row in the track list
-6. Choose output folder and format (FLAC / WAV / MP3)
-7. Click **Split & Tag** — individual files are written and tagged with Artist, Date, Venue, Source, Title, and track numbers
-
----
-
-## Live Show Tagger
-
-Equivalent to foo_tradersfriend / Live Show Tagger but built-in and cross-platform:
-
-1. **Tools → Live Show Tagger…**
-2. **Add folder** — loads all audio files in a show folder, auto-sorted
-3. The setlist `.txt` is auto-detected if it's in the same folder, or load it manually
-4. Edit Artist, Date, Venue, Location, Source as needed (Revert button restores originals)
-5. **Apply tags** — writes all tags in one pass; FLAC, MP3, WAV, M4A, and Ogg supported
-
-Source detection (SBD / AUD / FM, mic models like Schoeps MK4 or AKG 414) is automatic from the Source field text.
-
----
-
-## Manual launch (no installer)
-
+### Run from source (developers)
 ```bash
-# Mac / Linux — install deps first
-brew install python-tk ffmpeg flac          # Mac
-pip3 install mutagen tkinterdnd2
-
-# Run
+# macOS / Linux
+brew install python-tk ffmpeg flac        # macOS deps
+pip3 install -r requirements.txt
 python3 TradersLittleJedi.py
 ```
-
 ```bat
-:: Windows — install deps first, then:
+:: Windows
 TradersLittleJedi.cmd
 ```
 
 ---
 
+## The tools
+
+The home screen has nine tiles. The first three are the heart of the
+live-recording workflow.
+
+### ✂ Show Splitter
+Turn one full-show WAV/FLAC into individual, tagged tracks.
+- Loads the recording and draws an **interactive waveform** — zoom (mouse wheel
+  or +/−/Fit), scroll, and click to set the playback cursor.
+- **▶ Play** previews from the cursor through your chosen **audio output device**
+  (handy when your DAC isn't the system default).
+- **Drag the orange markers** to place track boundaries, or click **Detect
+  silences** to auto-propose them, or **Load setlist…** to pull titles from an
+  eTree `.txt`.
+- **Split & Tag** writes one FLAC/WAV/MP3 per track, fully tagged (artist, date,
+  venue, source, title, per-disc track numbers).
+
+### ♪ Live Show Tagger
+Tag one show, foo_tradersfriend-style but cross-platform.
+- **Add folder** (recurses into CD1/CD2 subfolders) auto-loads the audio and
+  auto-detects the setlist `.txt`.
+- Multi-select (click, shift-click, ⌘/Ctrl-click, ⌘/Ctrl-A) for bulk actions.
+- Edit Artist / Date / Venue / Location / Source with per-field Revert.
+- **File Tags** tab shows the standard mp3tag fields for the selected file so you
+  can see exactly what's there (or that it's untagged).
+- **Cover Art** tab previews the embedded cover and preserves it on save.
+- **Apply tags** writes FLAC, MP3, WAV, AIFF, M4A, Ogg, and Opus.
+- Recording source (SBD/AUD/FM, mic models like Schoeps MK4 or AKG 414) is
+  detected automatically from the Source text.
+
+### ⊛ Bulk Tag Cleanup
+Scan a whole library and normalize every show's tags at once.
+- Recursively finds show folders; **merges CD1/CD2 disc subfolders** into one
+  concert with correct disc numbers.
+- Infers Artist / Date / Venue / City / Source from setlist files, existing tags,
+  and folder names — skipping EAC/foobar/XLD **ripper logs** and handling
+  UTF-16/Windows-1252 encodings.
+- Review table with a **confidence score**; the **Proposed Artist** and
+  **Proposed Album** cells are **editable inline** so you can bulk-fix anything
+  the heuristics get wrong before writing.
+- Builds canonical album names: `YYYY-MM-DD Venue, City, Region [SBD/mics]`.
+
+### The rest
+| Tile | What it does |
+|---|---|
+| ⇄ **Batch Convert** | Convert many files/folders with saved presets — FLAC, WAV, MP3 (VBR/CBR/ABR), AAC, Ogg, AIFF. Post-conversion test, MD5, delete-source. |
+| ✎ **Audio Editor** | Waveform editor — trim, split, gapless merge. |
+| ✓ **Checksums** | Create & verify MD5, FFP, SFV, CFP, ST5. |
+| ⬡ **Torrents** | Create and verify `.torrent` files. |
+| ◎ **Analysis** | File details (MediaInfo), integrity tests, SBE check, MPEG-in-WAV detection, ReplayGain. |
+| ⊞ **More Tools** | DSD editor/trim, batch rename, strip/repair headers, convert, fix SBEs, update CLI tools. |
+
+**⚙ Settings** (top-right) sets default formats, compression levels, output
+folders, and other preferences, persisted across sessions.
+
+---
+
+## Setlist (eTree) format
+
+The tagger and splitter read plain-text setlist/info files. The parser is
+deliberately forgiving and handles:
+- **Key-value** headers (`Artist:`, `Date:`, `Venue:`, …)
+- **Positional** headers (artist / date / venue on separate lines)
+- **Embedded-date** headers (`The Rolling Stones 1999 06 08 Shepherds Bush…`)
+- **Numbered** setlists (`1. Song`) and **unnumbered** ones (bare titles under a
+  `Set 1:` / `Disc 2:` / `Encore:` header)
+- **Multi-disc** shows (`Disc 1:` / `CD 2:`) with continuous track numbering
+- UTF-8, UTF-16 (BOM or not), and Windows-1252 encodings
+- Trailing lineup/source/notes after the setlist
+
+---
+
 ## CLI tools
 
-The app uses bundled CLI tools on Windows (`tools\` folder) and system tools on Mac (via Homebrew). To update bundled tools: **Tools → Update all CLI tools…**
+| Tool | Used for | macOS | Windows |
+|---|---|---|---|
+| ffmpeg / ffprobe | decode, convert, tag, probe, waveform, silence detect | Homebrew | bundled in `tools\` |
+| flac / metaflac | encode/decode/test/tag FLAC | Homebrew | bundled |
+| lame | MP3 encoding | Homebrew | bundled |
+| mediainfo | detailed file info (optional) | `brew install media-info` | auto-download |
 
-| Tool | Used for |
-|---|---|
-| ffmpeg / ffprobe | Decode, convert, tag, probe audio files |
-| flac / metaflac | Encode, decode, test, tag FLAC files |
-| lame | MP3 encoding |
+On Windows the app resolves tools from `tools\` first; on macOS/Linux it uses
+your system PATH (Homebrew). **Tools → Update all CLI tools…** manages them.
+
+---
+
+## Building distributable apps
+
+See **[BUILD.md](BUILD.md)** for producing a signed/notarized macOS `.app`/`.dmg`
+and a Windows `.exe` installer via PyInstaller.
+
+---
+
+## Development
+
+```bash
+bash run_tests.sh          # 72 headless tests (pytest)
+pip install -r requirements-dev.txt
+```
+Tests cover the eTree parser, encoding/log detection, source detection, bulk
+inference, tag read/write, and tool-path resolution. Audio-touching tests skip
+automatically when ffmpeg/mutagen aren't present.
+
+Project layout:
+```
+audiohelper/            the app package (one module per tool dialog)
+  app.py                home screen + window
+  theme.py              dark theme (color tokens, ttk styles, log coloring)
+  show_splitter.py      Show Splitter (waveform view)
+  jedi_tagger.py        Live Show Tagger
+  bulk_tagger.py        Bulk Tag Cleanup
+  batch_convert.py      Batch Converter
+  live_tagger.py        eTree parser + setlist helpers
+  tc_tagger.py          mutagen tag read/write
+  tc_sources.py         SBD/AUD/FM + mic detection
+  tools.py              CLI tool discovery / auto-update
+tests/                  pytest suite
+assets/                 icon generator + generated icons
+installer/              Inno Setup script (Windows)
+TradersLittleJedi.py    entry point
+TradersLittleJedi.spec  PyInstaller spec
+```
 
 ---
 
 ## Requirements
 
 - Python 3.11+
-- `mutagen` — tag writing for FLAC, MP3, WAV, M4A, Ogg
-- `tkinterdnd2` — drag-and-drop support (optional; app works without it)
+- **mutagen** — tag read/write (FLAC, MP3, WAV, AIFF, M4A, Ogg, Opus)
+- **tkinterdnd2** — drag-and-drop (optional; the app runs without it)
+- **Pillow** — cover-art previews and icon generation (optional)
+- ffmpeg, ffprobe, flac, metaflac, lame on PATH (or bundled on Windows)

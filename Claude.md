@@ -1,4 +1,18 @@
-# Hi-Res Jedi: Combined Audio Tool — Development Plan
+> ⚠️ **Status: aspirational design doc — NOT the current app.**
+>
+> This is an early vision for an Electron/React rewrite ("Hi-Res Trader").
+> **The actual, shipping application is the Python + tkinter app** described in
+> [README.md](README.md) — *Trader's Little Jedi* in the `audiohelper/` package.
+> That app already implements most of what's below (encoding, checksums,
+> torrents, the Show Splitter waveform editor, Live Show Tagger, Bulk Tag
+> Cleanup, Batch Convert, DSD editing). This document is kept only as a record
+> of the original concept and a backlog of ideas; it is not a build plan for the
+> current codebase. Do not treat its file paths, tech stack (Electron/React), or
+> module layout as describing the real app.
+
+---
+
+# Hi-Res Jedi: Combined Audio Tool — Development Plan (historical)
 
 ## Executive Summary
 
