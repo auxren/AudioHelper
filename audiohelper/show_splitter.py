@@ -814,6 +814,11 @@ class ShowSplitterDialog(tk.Toplevel):
         return "break"
 
     def destroy(self) -> None:
+        # Stop any preview playback so audio doesn't keep playing after close.
+        try:
+            self.waveform._stop()
+        except Exception:
+            pass
         try:
             self.unbind_all("<space>")
         except Exception:
