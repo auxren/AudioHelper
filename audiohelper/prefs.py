@@ -1,6 +1,8 @@
 ﻿import tkinter as tk
 from tkinter import ttk, filedialog
 
+from . import theme as _theme
+
 
 _APE_LEVELS   = ["fast", "normal", "high", "extra high", "insane"]
 _CHK_TYPES    = [
@@ -20,12 +22,13 @@ _STARTUP_PAGES = [
 class PreferencesDialog(tk.Toplevel):
     def __init__(self, parent, config):
         super().__init__(parent)
-        self.title("Preferences")
+        self.title("Settings")
         self.config_obj = config
-        self.geometry("740x560")
+        self.geometry("760x580")
         self.minsize(680, 480)
         self.transient(parent)
         self.grab_set()
+        self.configure(bg=_theme.BG_DEEP)
 
         body = ttk.Frame(self)
         body.pack(fill="both", expand=True, padx=8, pady=8)

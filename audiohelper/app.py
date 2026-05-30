@@ -282,8 +282,8 @@ class MainWindow(_BaseTk):  # type: ignore[misc,valid-type]
              self._open_show_splitter, _theme.DEAD_PURPLE),
             ("♪", "Live Show Tagger", "Tag files from eTree\nsetlist text files",
              self._open_jedi_tagger,  _theme.DEAD_BLUE),
-            ("⇄", "Convert Format",   "Encode, decode, re-encode\nFLAC · WAV · MP3 · APE · SHN",
-             self._open_encode_wav,   _theme.DEAD_ORANGE),
+            ("⇄", "Batch Convert",    "Convert many files with presets\nFLAC · WAV · MP3 · AAC · Ogg",
+             self._open_batch_convert, _theme.DEAD_ORANGE),
             ("✎", "Audio Editor",     "Waveform editor, trim,\nsplit, gapless merge",
              self._open_audio_editor, _theme.DEAD_GREEN),
             # Row 1 — utilities
@@ -495,6 +495,10 @@ class MainWindow(_BaseTk):  # type: ignore[misc,valid-type]
     def _open_show_splitter(self) -> None:
         ShowSplitterDialog(self, self.config_obj, self.runner)
 
+    def _open_batch_convert(self) -> None:
+        from .batch_convert import BatchConvertDialog
+        BatchConvertDialog(self, self.config_obj, self.runner)
+
     def _open_analysis_menu(self) -> None:
         """Open a quick-picker for Analysis tools."""
         menu = tk.Menu(self, tearoff=0)
@@ -605,9 +609,6 @@ class MainWindow(_BaseTk):  # type: ignore[misc,valid-type]
 
     def _open_jedi_tagger(self) -> None:
         JediTaggerDialog.open_or_add(self, self.config_obj, self.runner)
-
-    def _open_show_splitter(self) -> None:
-        ShowSplitterDialog(self, self.config_obj, self.runner)
 
     def _open_dsd_edit(self) -> None:
         DsdEditDialog(self, self.config_obj, self.runner)
