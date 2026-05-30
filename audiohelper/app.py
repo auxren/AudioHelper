@@ -57,8 +57,8 @@ class MainWindow(_BaseTk):  # type: ignore[misc,valid-type]
             tk.Tk.__init__(self)
         self.title("Trader's Little Jedi")
         self.config_obj = Config()
-        self.geometry(self.config_obj.get("window_geometry", "820x520"))
-        self.minsize(640, 360)
+        self.minsize(640, 400)
+        self._apply_geometry(self.config_obj.get("window_geometry", "900x560"))
 
         self._build_menu()
         self._build_body()
@@ -188,6 +188,26 @@ class MainWindow(_BaseTk):  # type: ignore[misc,valid-type]
 
         self.status = ttk.Label(self, text="Ready", anchor="w", relief="sunken", padding=(6, 2))
         self.status.pack(fill="x", side="bottom")
+
+    # ----- geometry -----
+
+    def _apply_geometry(self, geo: str) -> None:
+        """Apply a saved geometry string, but reset position if it would land off-screen."""
+        import re
+        self.update_idletasks()
+        m = re.fullmatch(r"(\d+)x(\d+)(?:\+(-?\d+)\+(-?\d+))?", geo or "")
+        if not m:
+            return
+        w, h = int(m.group(1)), int(m.group(2))
+        x = int(m.group(3)) if m.group(3) is not None else None
+        y = int(m.group(4)) if m.group(4) is not None else None
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+        # If the saved position would put the window mostly off-screen, centre it.
+        if x is None or y is None or x > sw - 100 or y > sh - 100 or x < -w + 100 or y < 0:
+            x = max(0, (sw - w) // 2)
+            y = max(0, (sh - h) // 2)
+        self.geometry(f"{w}x{h}+{x}+{y}")
 
     # ----- drag-and-drop -----
 
