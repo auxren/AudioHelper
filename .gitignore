@@ -11,3 +11,6 @@ tools/*.pdf
 
 # User config (contains local paths)
 config.json
+
+# Virtual environment (created by installer)
+.venv/

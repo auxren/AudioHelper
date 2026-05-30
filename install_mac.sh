@@ -96,25 +96,33 @@ fi
 ok "ffmpeg: $(ffmpeg -version 2>&1 | head -1)"
 ok "flac:   $(flac --version 2>&1 | head -1)"
 
-# ─── Step 4: Python packages ─────────────────────────────────────────────────
-step "Installing Python packages (mutagen, tkinterdnd2)…"
-"$PYTHON3" -m pip install --upgrade pip --quiet
-"$PYTHON3" -m pip install mutagen tkinterdnd2 --quiet
+# ─── Step 4: Virtual environment + Python packages ───────────────────────────
+step "Creating virtual environment and installing packages..."
+VENV_DIR="$APP_DIR/.venv"
+if [[ ! -d "$VENV_DIR" ]]; then
+    "$PYTHON3" -m venv "$VENV_DIR"
+fi
+VENV_PYTHON="$VENV_DIR/bin/python3"
+"$VENV_PYTHON" -m pip install --upgrade pip --quiet
+"$VENV_PYTHON" -m pip install mutagen tkinterdnd2 --quiet
+ok "Virtual environment ready: $VENV_DIR"
 ok "mutagen and tkinterdnd2 installed."
 
+# From here on, launchers use the venv Python so packages are always available.
+
 # ─── Step 5: Desktop launcher ────────────────────────────────────────────────
-step "Creating Desktop launcher…"
+step "Creating Desktop launcher..."
 LAUNCHER="$HOME/Desktop/${APP_NAME}.command"
 cat > "$LAUNCHER" <<SCRIPT
 #!/usr/bin/env bash
 cd "$APP_DIR"
-exec "$PYTHON3" TradersLittleJedi.py
+exec "$VENV_DIR/bin/python3" TradersLittleJedi.py
 SCRIPT
 chmod +x "$LAUNCHER"
 ok "Launcher created: $LAUNCHER"
 
-# ─── Step 6: (Optional) .app bundle in Applications ──────────────────────────
-step "Creating Applications/.app bundle…"
+# ─── Step 6: .app bundle in Applications ─────────────────────────────────────
+step "Creating Applications/.app bundle..."
 APP_BUNDLE="/Applications/${APP_NAME}.app"
 MACOS_DIR="$APP_BUNDLE/Contents/MacOS"
 mkdir -p "$MACOS_DIR"
@@ -122,7 +130,7 @@ mkdir -p "$MACOS_DIR"
 cat > "$MACOS_DIR/${APP_NAME}" <<SCRIPT
 #!/usr/bin/env bash
 cd "$APP_DIR"
-exec "$PYTHON3" TradersLittleJedi.py
+exec "$VENV_DIR/bin/python3" TradersLittleJedi.py
 SCRIPT
 chmod +x "$MACOS_DIR/${APP_NAME}"
 
