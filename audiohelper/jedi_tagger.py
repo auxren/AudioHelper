@@ -272,7 +272,8 @@ class JediTaggerDialog(tk.Toplevel):
         lf.pack(fill="both", expand=True)
 
         cols = ("num", "filename", "title", "match")
-        self.tv = ttk.Treeview(lf, columns=cols, show="headings", selectmode="browse")
+        # extended = click, shift-click for a range, cmd/ctrl-click for individual
+        self.tv = ttk.Treeview(lf, columns=cols, show="headings", selectmode="extended")
         self.tv.heading("num",      text="#",        anchor="center")
         self.tv.heading("filename", text="Filename",  anchor="w")
         self.tv.heading("title",    text="Title",     anchor="w")
@@ -293,6 +294,15 @@ class JediTaggerDialog(tk.Toplevel):
         self.tv.tag_configure("extra",     foreground="#cc6600")
 
         self.tv.bind("<<TreeviewSelect>>", self._on_file_select)
+        # Select-all: Cmd-A on Mac, Ctrl-A elsewhere
+        self.tv.bind("<Command-a>", self._select_all_files)
+        self.tv.bind("<Command-A>", self._select_all_files)
+        self.tv.bind("<Control-a>", self._select_all_files)
+        self.tv.bind("<Control-A>", self._select_all_files)
+
+    def _select_all_files(self, _evt=None) -> str:
+        self.tv.selection_set(self.tv.get_children())
+        return "break"
 
     def _build_per_track_section(self, parent: tk.Widget) -> None:
         pt = ttk.LabelFrame(parent, text="Per-track (this file)", padding=8)
@@ -558,25 +568,28 @@ class JediTaggerDialog(tk.Toplevel):
         if not d:
             return
         folder = Path(d)
+        # Recurse into subfolders so multi-disc shows nested in Disc 1/Disc 2/
+        # (or any deeper structure) are all picked up.
         files = sorted(
-            str(p) for p in folder.iterdir()
+            str(p) for p in folder.rglob("*")
             if p.is_file()
             and p.suffix.lower() in AUDIO_EXTS
             and not _should_ignore(p.name)
         )
         if not files:
             messagebox.showwarning("Live Show Tagger",
-                                   f"No supported audio files found in:\n{folder}")
+                                   f"No supported audio files found in:\n{folder}\n"
+                                   "(searched all subfolders)")
             return
         self.config_obj["last_input_dir"] = str(folder)
         self.config_obj.save()
         self._add_files_list(files)
 
-        # Auto-detect text file if not already loaded
+        # Auto-detect a text file anywhere in the tree if not already loaded
         if self._txt_path is None or self._txt_path.parent.resolve() != folder.resolve():
             txts = sorted(
-                p for p in folder.iterdir()
-                if p.suffix.lower() == ".txt" and not _should_ignore(p.name)
+                p for p in folder.rglob("*.txt")
+                if not _should_ignore(p.name)
             )
             if txts:
                 self._load_txt_path(txts[0])
