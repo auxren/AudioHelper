@@ -67,6 +67,59 @@ def _sanitize(name: str) -> str:
     return name or "untitled"
 
 
+# Default eTree filename template: "{abbrev}{date}d{set}t{track}", e.g.
+# bruce2026-04-13d1t01.flac
+DEFAULT_NAME_TEMPLATE = "%a%dd%Dt%n"
+
+
+def _apply_name_template(template: str, abbrev: str, date: str,
+                         disc: int, track: int, title: str, ext: str) -> str:
+    """Substitute filename tokens. Tokens are case-sensitive:
+       %a artist abbrev   %d date   %D set/disc #   %n track # (2-digit)
+       %t track title
+    """
+    out = template
+    out = out.replace("%a", abbrev)
+    out = out.replace("%d", date)
+    out = out.replace("%D", str(disc))
+    out = out.replace("%n", f"{track:02d}")
+    out = out.replace("%t", title)
+    out = _sanitize(out)
+    if not out.lower().endswith(ext):
+        out += ext
+    return out
+
+
+def _guess_abbrev(artist: str) -> str:
+    """Guess an eTree-style abbreviation from an artist name.
+
+    Uses the etree alias table when the artist is known, otherwise falls back
+    to initials for multi-word names or the lowercased name for short ones.
+    """
+    import re
+    a = artist.strip().lower()
+    if not a:
+        return ""
+    known = {
+        "grateful dead": "gd", "phish": "ph", "widespread panic": "wsp",
+        "dave matthews band": "dmb", "allman brothers band": "abb",
+        "string cheese incident": "sci", "umphrey's mcgee": "um",
+        "dark star orchestra": "dso", "jerry garcia band": "jgb",
+        "phil lesh & friends": "phil", "gov't mule": "mule",
+        "leftover salmon": "ls", "yonder mountain string band": "ymsb",
+        "bruce springsteen": "bruce", "grahame lesh & friends": "glaf",
+        "railroad earth": "rre", "blues traveler": "bt", "moe.": "moe",
+        "the disco biscuits": "db", "trey anastasio": "trey",
+    }
+    if a in known:
+        return known[a]
+    words = re.sub(r"[^\w\s&]", "", a).split()
+    words = [w for w in words if w not in ("the", "and", "&", "of")]
+    if len(words) == 1:
+        return words[0][:8]
+    return "".join(w[0] for w in words)[:6]
+
+
 def _probe(ffprobe: Path, path: Path) -> dict:
     import json
     try:
@@ -880,15 +933,19 @@ class ShowSplitterDialog(tk.Toplevel):
             ("Date",     "DATE"),
             ("Venue",    "VENUE"),
             ("Location", "LOCATION"),
+            ("Abbrev",   "ABBREV"),
         ]):
             ttk.Label(left, text=f"{label}:").grid(row=row_i, column=0, sticky="w", pady=2)
             var = tk.StringVar()
             self._field_vars[key] = var
             ttk.Entry(left, textvariable=var).grid(row=row_i, column=1,
                                                     sticky="ew", padx=(6, 0), pady=2)
-        ttk.Label(left, text="Source:").grid(row=4, column=0, sticky="nw", pady=2)
+        # Keep the eTree filename prefix in sync as artist/date/abbrev change.
+        self._field_vars["ABBREV"].trace_add("write", lambda *_: self._refresh_name_preview())
+        self._field_vars["DATE"].trace_add("write", lambda *_: self._refresh_name_preview())
+        ttk.Label(left, text="Source:").grid(row=5, column=0, sticky="nw", pady=2)
         self._source_widget = tk.Text(left, height=3, font=("Segoe UI", 9), wrap="word")
-        self._source_widget.grid(row=4, column=1, sticky="ew", padx=(6, 0), pady=2)
+        self._source_widget.grid(row=5, column=1, sticky="ew", padx=(6, 0), pady=2)
         paned.add(left, weight=1)
 
         # Track list
@@ -936,6 +993,22 @@ class ShowSplitterDialog(tk.Toplevel):
     # ── Bottom bar ────────────────────────────────────────────────────────────
 
     def _build_bottom_bar(self) -> None:
+        # ── Filename template row ─────────────────────────────────────────────
+        name_bar = ttk.Frame(self, padding=(8, 2))
+        name_bar.pack(fill="x", side="bottom")
+        ttk.Label(name_bar, text="Filename:").pack(side="left")
+        self.var_nametpl = tk.StringVar(
+            value=self.config_obj.get("splitter_name_template", DEFAULT_NAME_TEMPLATE))
+        ent = ttk.Entry(name_bar, textvariable=self.var_nametpl, width=26)
+        ent.pack(side="left", padx=(4, 4))
+        self.var_nametpl.trace_add("write", lambda *_: self._refresh_name_preview())
+        ttk.Button(name_bar, text="?", width=2, style="Ghost.TButton",
+                   command=self._show_name_help).pack(side="left")
+        self.lbl_name_preview = ttk.Label(name_bar, text="", style="Dim.TLabel")
+        self.lbl_name_preview.pack(side="right")
+        ttk.Label(name_bar, text="e.g.", style="Dim.TLabel").pack(side="right", padx=(0, 4))
+
+        # ── Output folder / format / actions row ──────────────────────────────
         bar = ttk.Frame(self, padding=(8, 4))
         bar.pack(fill="x", side="bottom")
         ttk.Label(bar, text="Output folder:").pack(side="left")
@@ -954,6 +1027,74 @@ class ShowSplitterDialog(tk.Toplevel):
         self.btn_split.pack(side="right", padx=4)
         self.progress = ttk.Progressbar(bar, mode="determinate", length=180)
         self.progress.pack(side="right", padx=(0, 8))
+        self._refresh_name_preview()
+
+    def _refresh_name_preview(self) -> None:
+        """Show a live example of the filename template for track 1, disc 1."""
+        if not hasattr(self, "lbl_name_preview"):
+            return
+        abbrev = self._field_vars.get("ABBREV").get().strip() if hasattr(self, "_field_vars") else ""
+        date   = self._field_vars.get("DATE").get().strip() if hasattr(self, "_field_vars") else ""
+        ext = {"FLAC": ".flac", "WAV": ".wav", "MP3": ".mp3"}.get(
+            getattr(self, "var_fmt", tk.StringVar(value="FLAC")).get(), ".flac")
+        example = _apply_name_template(
+            self.var_nametpl.get(), abbrev or "band", date or "2026-01-01",
+            disc=1, track=1, title="Opening", ext=ext)
+        self.lbl_name_preview.configure(text=example)
+
+    def _show_name_help(self) -> None:
+        """Popup explaining the filename format tokens (XLD-style)."""
+        dlg = tk.Toplevel(self)
+        dlg.title("Filename format")
+        dlg.transient(self)
+        dlg.resizable(False, False)
+        _t.apply(dlg)
+        dlg.configure(bg=_t.BG_DEEP)
+
+        frm = ttk.Frame(dlg, padding=14)
+        frm.pack(fill="both", expand=True)
+        ttk.Label(frm, text="Filename format tokens",
+                  font=("Segoe UI", 13, "bold")).pack(anchor="w")
+        ttk.Label(frm, style="Dim.TLabel",
+                  text="Build output filenames from these tokens. Anything else "
+                       "(letters, digits, dashes) is kept literally.").pack(
+            anchor="w", pady=(2, 10))
+
+        grid = ttk.Frame(frm)
+        grid.pack(fill="x")
+        rows = [
+            ("%a", "Artist abbreviation", "bruce"),
+            ("%d", "Date (YYYY-MM-DD)", "2026-04-13"),
+            ("%D", "Set / disc number", "1"),
+            ("%n", "Track number (2-digit)", "01"),
+            ("%t", "Track title", "Rosalita"),
+        ]
+        for r, (tok, desc, ex) in enumerate(rows):
+            ttk.Label(grid, text=tok, font=("Consolas", 11, "bold"),
+                      foreground=_t.ACCENT_INFO).grid(row=r, column=0, sticky="w", padx=(0, 10), pady=2)
+            ttk.Label(grid, text=desc).grid(row=r, column=1, sticky="w", padx=(0, 16))
+            ttk.Label(grid, text=f"→ {ex}", style="Dim.TLabel").grid(
+                row=r, column=2, sticky="w")
+
+        ttk.Separator(frm).pack(fill="x", pady=10)
+        ttk.Label(frm, text="Examples", font=("Segoe UI", 11, "bold")).pack(anchor="w")
+        for tpl, out in [
+            ("%a%dd%Dt%n", "bruce2026-04-13d1t01.flac   (eTree standard)"),
+            ("%a%dd%Dt%n %t", "bruce2026-04-13d1t01 Rosalita.flac"),
+            ("%D-%n %t", "1-01 Rosalita.flac"),
+        ]:
+            row = ttk.Frame(frm)
+            row.pack(fill="x", pady=1)
+            ttk.Label(row, text=tpl, font=("Consolas", 10),
+                      foreground=_t.ACCENT_PRIMARY, width=16).pack(side="left")
+            ttk.Label(row, text=out, style="Dim.TLabel").pack(side="left")
+
+        btns = ttk.Frame(frm)
+        btns.pack(fill="x", pady=(12, 0))
+        ttk.Button(btns, text="Use eTree standard (%a%dd%Dt%n)",
+                   command=lambda: (self.var_nametpl.set(DEFAULT_NAME_TEMPLATE),
+                                    dlg.destroy())).pack(side="left")
+        ttk.Button(btns, text="Close", command=dlg.destroy).pack(side="right")
 
     # ── Audio loading ─────────────────────────────────────────────────────────
 
@@ -1039,6 +1180,8 @@ class ShowSplitterDialog(tk.Toplevel):
         self._field_vars["DATE"].set(show.date)
         self._field_vars["VENUE"].set(show.venue)
         self._field_vars["LOCATION"].set(show.location)
+        if not self._field_vars["ABBREV"].get().strip():
+            self._field_vars["ABBREV"].set(_guess_abbrev(show.artist))
         self._source_widget.delete("1.0", "end")
         self._source_widget.insert("1.0", show.source)
         self._tracks_from_show(show)
@@ -1337,33 +1480,48 @@ class ShowSplitterDialog(tk.Toplevel):
             "VENUE":    self._field_vars["VENUE"].get().strip(),
             "LOCATION": self._field_vars["LOCATION"].get().strip(),
             "SOURCE":   self._source_widget.get("1.0", "end").strip(),
+            "ABBREV":   self._field_vars["ABBREV"].get().strip(),
         }
+        template = self.var_nametpl.get().strip() or DEFAULT_NAME_TEMPLATE
+        # Remember the template for next time.
+        self.config_obj["splitter_name_template"] = template
+        self.config_obj.save()
         threading.Thread(
             target=self._worker,
-            args=(ffmpeg, list(self._tracks), fields,
+            args=(ffmpeg, list(self._tracks), fields, template,
                   self.var_fmt.get(), outdir, self._duration),
             daemon=True,
         ).start()
 
     def _worker(self, ffmpeg: Path, tracks: list[SplitTrack],
-                fields: dict, fmt: str, outdir: Path, total_dur: float) -> None:
+                fields: dict, template: str, fmt: str, outdir: Path,
+                total_dur: float) -> None:
         ext = {"FLAC": ".flac", "WAV": ".wav", "MP3": ".mp3"}.get(fmt, ".flac")
         src_info = detect_source(fields.get("SOURCE", ""))
         src_label = src_info.label()
-        album_parts = [v for v in [fields.get("DATE"), fields.get("VENUE"),
-                                    fields.get("LOCATION")] if v]
-        album = " ".join(album_parts[:2])  # Date + Venue
+        # Album = "DATE Venue, Location"  (e.g. "2026-05-24 HopMonk, Novato, CA")
+        place = ", ".join(v for v in [fields.get("VENUE"), fields.get("LOCATION")] if v)
+        album = " ".join(v for v in [fields.get("DATE"), place] if v).strip()
         if src_label:
             album = f"{album} {src_label}".strip()
+
+        abbrev = fields.get("ABBREV") or _guess_abbrev(fields.get("ARTIST", ""))
+        date_str = fields.get("DATE", "")
 
         disc_totals: dict[int, int] = {}
         for t in tracks:
             disc_totals[t.disc] = disc_totals.get(t.disc, 0) + 1
         n = len(tracks)
+        # Per-disc running track number for the eTree d{D}t{n} filename.
+        disc_counter: dict[int, int] = {}
         ok, errors = 0, []
 
         for i, track in enumerate(tracks):
-            fname = f"{track.number:02d} - {_sanitize(track.title)}{ext}"
+            disc_counter[track.disc] = disc_counter.get(track.disc, 0) + 1
+            track_in_disc = disc_counter[track.disc]
+            fname = _apply_name_template(
+                template, abbrev, date_str, track.disc, track_in_disc,
+                _sanitize(track.title), ext)
             out   = outdir / fname
             start = track.start_sec
             end   = tracks[i + 1].start_sec if i + 1 < n else None
@@ -1401,9 +1559,9 @@ class ShowSplitterDialog(tk.Toplevel):
                 "LOCATION":    fields.get("LOCATION", ""),
                 "SOURCE":      fields.get("SOURCE", ""),
                 "TITLE":       track.title,
-                "TRACKNUMBER": f"{track.number:02d}",
-                "TRACKTOTAL":  str(n),
-                "TOTALTRACKS": str(n),
+                "TRACKNUMBER": f"{track_in_disc:02d}",
+                "TRACKTOTAL":  str(disc_totals.get(track.disc, n)),
+                "TOTALTRACKS": str(disc_totals.get(track.disc, n)),
             }
             if track.disc_total > 1:
                 tag_dict["DISCNUMBER"] = str(track.disc)

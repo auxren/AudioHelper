@@ -1,7 +1,35 @@
 """Tests for Show Splitter time helpers and silence parsing."""
 import pytest
 
-from audiohelper.show_splitter import _fmt_time, _parse_time, _sanitize, _nice_tick
+from audiohelper.show_splitter import (
+    _fmt_time, _parse_time, _sanitize, _nice_tick,
+    _apply_name_template, _guess_abbrev,
+)
+
+
+def test_etree_filename_template():
+    assert _apply_name_template("%a%dd%Dt%n", "bruce", "2026-04-13",
+                                1, 1, "Rosalita", ".flac") == "bruce2026-04-13d1t01.flac"
+    assert _apply_name_template("%a%dd%Dt%n", "bruce", "2026-04-13",
+                                2, 3, "X", ".flac") == "bruce2026-04-13d2t03.flac"
+
+
+def test_filename_template_with_title():
+    assert _apply_name_template("%D-%n %t", "x", "2020-01-01",
+                                1, 5, "Maria", ".mp3") == "1-05 Maria.mp3"
+
+
+def test_filename_template_adds_extension_once():
+    out = _apply_name_template("%a%dd%Dt%n", "x", "2020-01-01", 1, 1, "t", ".flac")
+    assert out.endswith(".flac") and out.count(".flac") == 1
+
+
+def test_guess_abbrev():
+    assert _guess_abbrev("Grateful Dead") == "gd"
+    assert _guess_abbrev("Bruce Springsteen") == "bruce"
+    assert _guess_abbrev("ALO") == "alo"
+    assert _guess_abbrev("Grahame Lesh & Friends") == "glaf"
+    assert _guess_abbrev("") == ""
 
 
 def test_fmt_time_minutes():
