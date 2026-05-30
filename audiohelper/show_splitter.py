@@ -90,6 +90,72 @@ def _apply_name_template(template: str, abbrev: str, date: str,
     return out
 
 
+SESSION_EXT = ".tljsplit"
+_SESSION_HEADER = "# Trader's Little Jedi — Show Split Session (v1)"
+
+
+def serialize_session(audio_path, meta: dict, tracks: list) -> str:
+    """Render a human-readable, hand-editable session file.
+
+    *meta* keys: source, artist, date, venue, location, abbrev, source_chain,
+    format, template. *tracks* is a list of (start_sec, disc, title).
+    """
+    lines = [
+        _SESSION_HEADER,
+        "# Lines starting with # are comments. Edit times, sets, and titles",
+        "# freely, then reload in the Show Splitter.",
+        "",
+        f"source       = {audio_path or ''}",
+        f"artist       = {meta.get('artist', '')}",
+        f"date         = {meta.get('date', '')}",
+        f"venue        = {meta.get('venue', '')}",
+        f"location     = {meta.get('location', '')}",
+        f"abbrev       = {meta.get('abbrev', '')}",
+        f"source_chain = {meta.get('source_chain', '')}",
+        f"format       = {meta.get('format', 'FLAC')}",
+        f"template     = {meta.get('template', DEFAULT_NAME_TEMPLATE)}",
+        "",
+        "# Tracks:  START | SET | TITLE",
+        "[tracks]",
+    ]
+    for start, disc, title in tracks:
+        lines.append(f"{_fmt_time(start):>10} | {disc} | {title}")
+    return "\n".join(lines) + "\n"
+
+
+def parse_session(text: str) -> dict:
+    """Parse a session file into {'meta': {...}, 'tracks': [(start, disc, title)]}."""
+    meta: dict = {}
+    tracks: list = []
+    in_tracks = False
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        if s.lower() == "[tracks]":
+            in_tracks = True
+            continue
+        if not in_tracks and "=" in line:
+            key, _, val = line.partition("=")
+            meta[key.strip().lower()] = val.strip()
+            continue
+        if in_tracks:
+            # Split into at most 3 fields so a title may itself contain '|'.
+            parts = s.split("|", 2)
+            if len(parts) >= 3:
+                try:
+                    start = _parse_time(parts[0].strip())
+                except ValueError:
+                    continue
+                try:
+                    disc = int(parts[1].strip())
+                except ValueError:
+                    disc = 1
+                tracks.append((start, disc, parts[2].strip()))
+    return {"meta": meta, "tracks": tracks}
+
+
 def _guess_abbrev(artist: str) -> str:
     """Guess an eTree-style abbreviation from an artist name.
 
@@ -261,6 +327,9 @@ class WaveformView(tk.Frame):
                                  bg=self.BG_COLOR, font=("Consolas", 11),
                                  width=10, anchor="w")
         self.lbl_time.pack(side="left")
+        tk.Label(tr, text="scroll = zoom · shift-scroll = pan · click = scrub",
+                 fg=_t.FG_DIM, bg=self.BG_COLOR,
+                 font=("Segoe UI", 9)).pack(side="left", padx=(10, 0))
         self._zoom_btns: list[ttk.Button] = []
         for label, cmd in (("Fit", self._zoom_fit),
                             ("−",   self._zoom_out),
@@ -295,15 +364,16 @@ class WaveformView(tk.Frame):
         self.canvas.bind("<ButtonPress-1>",   self._on_press)
         self.canvas.bind("<B1-Motion>",       self._on_drag)
         self.canvas.bind("<ButtonRelease-1>", self._on_release)
-        # Trackpad / wheel: plain scroll pans (traverse), modifier+scroll zooms
-        # (Tk on macOS has no native pinch event, so ⌘/Ctrl+scroll is the zoom
-        # gesture). Vertical and horizontal two-finger scroll both pan.
-        self.canvas.bind("<MouseWheel>",          self._on_scroll_pan)
-        self.canvas.bind("<Shift-MouseWheel>",    self._on_scroll_pan)
-        self.canvas.bind("<Command-MouseWheel>",  self._on_scroll_zoom)
-        self.canvas.bind("<Control-MouseWheel>",  self._on_scroll_zoom)
-        self.canvas.bind("<Button-4>",            self._on_scroll_pan)
-        self.canvas.bind("<Button-5>",            self._on_scroll_pan)
+        # Trackpad / wheel. Tk has no native pinch gesture, so the reliable
+        # two-finger gesture (vertical scroll → MouseWheel) drives ZOOM, and
+        # horizontal swipe (Shift-MouseWheel) or Shift+scroll PANS. Bound on
+        # both the canvas and the frame so it works anywhere over the waveform.
+        for w in (self.canvas, self):
+            w.bind("<MouseWheel>",       self._on_scroll_zoom)
+            w.bind("<Shift-MouseWheel>", self._on_scroll_pan)
+            w.bind("<Option-MouseWheel>", self._on_scroll_pan)
+            w.bind("<Button-4>",         self._on_scroll_zoom)
+            w.bind("<Button-5>",         self._on_scroll_zoom)
         self._scrubbing = False
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -569,9 +639,14 @@ class WaveformView(tk.Frame):
         return "break"
 
     def _on_scroll_zoom(self, event) -> str:
-        """⌘/Ctrl + scroll → zoom around the pointer (pinch substitute)."""
+        """Two-finger scroll → zoom around the pointer. Factor scales with the
+        scroll delta so trackpad (many small deltas) zooms smoothly and a mouse
+        wheel (one big notch) zooms in clear steps."""
         delta = self._wheel_delta(event)
-        factor = 1.25 if delta > 0 else 1 / 1.25
+        if delta == 0:
+            return "break"
+        factor = 1.0 + 0.18 * max(-3.0, min(3.0, delta))
+        factor = max(0.5, min(2.0, factor))
         self._zoom_around(factor, self._x_to_sec(event.x))
         return "break"
 
@@ -895,6 +970,9 @@ class ShowSplitterDialog(tk.Toplevel):
         ttk.Button(bar, text="Remove",     command=self._remove_track).pack(side="left", padx=4)
         ttk.Button(bar, text="↑",  width=3, command=self._move_up).pack(side="left")
         ttk.Button(bar, text="↓",  width=3, command=self._move_down).pack(side="left", padx=2)
+        ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=6)
+        ttk.Button(bar, text="Save session…", command=self._save_session).pack(side="left")
+        ttk.Button(bar, text="Load session…", command=self._load_session).pack(side="left", padx=4)
 
     # ── Body ──────────────────────────────────────────────────────────────────
 
@@ -1153,8 +1231,13 @@ class ShowSplitterDialog(tk.Toplevel):
         self.btn_silence.configure(state="normal" if dur > 0 else "disabled")
         self.waveform.load(path, ffmpeg, dur,
                            status_cb=lambda msg: self.status.configure(text=msg))
-        if self._tracks:
+        # Even-split only when tracks came from a setlist with no real times.
+        # A restored session already has start times — preserve them.
+        if self._tracks and not getattr(self, "_preserve_track_times", False):
             self._even_split()
+        else:
+            self._sync_markers()
+        self._preserve_track_times = False
         self._update_split_btn()
 
     # ── Setlist loading ───────────────────────────────────────────────────────
@@ -1455,6 +1538,95 @@ class ShowSplitterDialog(tk.Toplevel):
     def _update_split_btn(self) -> None:
         ok = bool(self._audio_path and self._tracks and self.var_outdir.get())
         self.btn_split.configure(state="normal" if ok else "disabled")
+
+    # ── Session save / load ────────────────────────────────────────────────────
+
+    def _save_session(self) -> None:
+        if not self._tracks and not self._audio_path:
+            messagebox.showinfo("Show Splitter",
+                                "Nothing to save yet — load a show and add some tracks.")
+            return
+        meta = {
+            "artist":       self._field_vars["ARTIST"].get().strip(),
+            "date":         self._field_vars["DATE"].get().strip(),
+            "venue":        self._field_vars["VENUE"].get().strip(),
+            "location":     self._field_vars["LOCATION"].get().strip(),
+            "abbrev":       self._field_vars["ABBREV"].get().strip(),
+            "source_chain": self._source_widget.get("1.0", "end").strip(),
+            "format":       self.var_fmt.get(),
+            "template":     self.var_nametpl.get().strip(),
+        }
+        tracks = [(t.start_sec, t.disc, t.title) for t in self._tracks]
+        content = serialize_session(
+            str(self._audio_path) if self._audio_path else "", meta, tracks)
+
+        # Default filename from abbrev+date, next to the audio file.
+        default = (f"{meta['abbrev']}{meta['date']}" if meta['abbrev'] and meta['date']
+                   else (self._audio_path.stem if self._audio_path else "session"))
+        initial_dir = str(self._audio_path.parent) if self._audio_path else None
+        out = filedialog.asksaveasfilename(
+            parent=self, title="Save split session",
+            initialdir=initial_dir, initialfile=default + SESSION_EXT,
+            defaultextension=SESSION_EXT,
+            filetypes=[("TLJ split session", f"*{SESSION_EXT}"), ("All files", "*.*")])
+        if not out:
+            return
+        try:
+            Path(out).write_text(content, encoding="utf-8")
+        except OSError as e:
+            messagebox.showerror("Show Splitter", f"Could not save:\n{e}")
+            return
+        self.status.configure(text=f"Saved session: {Path(out).name}")
+
+    def _load_session(self) -> None:
+        f = filedialog.askopenfilename(
+            parent=self, title="Load split session",
+            initialdir=self.config_obj.get("last_input_dir") or None,
+            filetypes=[("TLJ split session", f"*{SESSION_EXT}"),
+                       ("Text files", "*.txt"), ("All files", "*.*")])
+        if not f:
+            return
+        try:
+            data = parse_session(read_text_smart(Path(f)))
+        except OSError as e:
+            messagebox.showerror("Show Splitter", f"Could not read:\n{e}")
+            return
+        meta = data["meta"]
+        # Restore fields
+        self._field_vars["ARTIST"].set(meta.get("artist", ""))
+        self._field_vars["DATE"].set(meta.get("date", ""))
+        self._field_vars["VENUE"].set(meta.get("venue", ""))
+        self._field_vars["LOCATION"].set(meta.get("location", ""))
+        self._field_vars["ABBREV"].set(meta.get("abbrev", ""))
+        self._source_widget.delete("1.0", "end")
+        self._source_widget.insert("1.0", meta.get("source_chain", ""))
+        if meta.get("format") in ("FLAC", "WAV", "MP3"):
+            self.var_fmt.set(meta["format"])
+        if meta.get("template"):
+            self.var_nametpl.set(meta["template"])
+
+        # Restore tracks
+        n_sets = max((d for _, d, _ in data["tracks"]), default=1)
+        self._tracks = [
+            SplitTrack(number=i + 1, title=title, start_sec=round(start, 2),
+                       disc=disc, disc_total=n_sets)
+            for i, (start, disc, title) in enumerate(data["tracks"])
+        ]
+        self._sort_tracks()
+        self._refresh_tv()
+        self._sync_markers()
+        self._update_split_btn()
+
+        # Load the referenced audio file if it still exists.
+        src = meta.get("source", "")
+        if src and Path(src).exists():
+            self._preserve_track_times = True   # don't even-split over restored times
+            self._load_audio(Path(src))
+            self.status.configure(text=f"Loaded session: {Path(f).name}")
+        else:
+            self.status.configure(
+                text=f"Loaded session: {Path(f).name}  "
+                     "(audio file missing — use Load show file… to relink)")
 
     # ── Split & Tag ───────────────────────────────────────────────────────────
 

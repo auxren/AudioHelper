@@ -4,7 +4,39 @@ import pytest
 from audiohelper.show_splitter import (
     _fmt_time, _parse_time, _sanitize, _nice_tick,
     _apply_name_template, _guess_abbrev,
+    serialize_session, parse_session,
 )
+
+
+def test_session_roundtrip():
+    meta = {"artist": "ALO", "date": "2026-05-24", "venue": "HopMonk",
+            "location": "Novato, CA", "abbrev": "alo",
+            "source_chain": "Schoeps MK22 > MixPre", "format": "FLAC",
+            "template": "%a%dd%Dt%n"}
+    tracks = [(0.0, 1, "ANIMAL"), (263.5, 1, "BLANK"), (540.2, 2, "GTDIA")]
+    text = serialize_session("/x/alo.caf", meta, tracks)
+    d = parse_session(text)
+    assert d["meta"]["artist"] == "ALO"
+    assert d["meta"]["template"] == "%a%dd%Dt%n"
+    assert d["meta"]["source"] == "/x/alo.caf"
+    assert d["tracks"] == tracks
+
+
+def test_session_tolerates_hand_edits():
+    # Comments, blank lines, and a pipe in a title must survive.
+    text = (
+        "# my edited session\n"
+        "artist = Phish\n"
+        "date = 1997-12-31\n"
+        "\n"
+        "[tracks]\n"
+        "0:00 | 1 | Mike's Song\n"
+        "5:30 | 1 | I Am Hydrogen | reprise\n"
+    )
+    d = parse_session(text)
+    assert d["meta"]["artist"] == "Phish"
+    assert d["tracks"][0] == (0.0, 1, "Mike's Song")
+    assert d["tracks"][1] == (330.0, 1, "I Am Hydrogen | reprise")
 
 
 def test_etree_filename_template():
