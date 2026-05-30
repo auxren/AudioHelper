@@ -81,6 +81,27 @@ def test_unnumbered_does_not_eat_divider():
     assert [t.title for t in show.all_tracks()] == ["Song One", "Song Two"]
 
 
+def test_us_date_header_and_repeated_blocks():
+    """The ALO case: 'ALO 5/24/26' US date, header repeated before SET 2,
+    footnote line, and a footnote marker on a track title."""
+    txt = (
+        "ALO 5/24/26\nHopMonk Novato, CA\nSET 1\n\n"
+        "ANIMAL\nTRY\nBABY\n\n"
+        "ALO 5/24/26\nHopMonk Novato, CA\nSET 2\n\n"
+        "GTDIA\nLAUNDRY*\nGNIGHT\n\n*ASHER\n")
+    show = parse_etree_file(txt)
+    assert show.artist == "ALO"
+    assert show.date == "2026-05-24"            # 5/24/26 → ISO
+    assert _labels(show) == [("Set 1", 3), ("Set 2", 3)]
+    titles = [t.title for t in show.all_tracks()]
+    # Repeated "ALO 5/24/26" / "HopMonk Novato, CA" are NOT tracks
+    assert "ALO 5/24/26" not in titles
+    assert "HopMonk Novato, CA" not in titles
+    # Footnote marker stripped, footnote line not a track
+    assert "LAUNDRY" in titles and "LAUNDRY*" not in titles
+    assert "*ASHER" not in titles
+
+
 # ── Track comments in parentheses ─────────────────────────────────────────────
 
 def test_track_comment_extracted():

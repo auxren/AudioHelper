@@ -134,6 +134,34 @@ _TRACK_RE = re.compile(r'^(\d+)[.)]\s+(.*)$')
 _EMBEDDED_DATE_RE = re.compile(
     r'\b((?:19|20)\d{2})[\s._/-](0?[1-9]|1[0-2])[\s._/-](0?[1-9]|[12]\d|3[01])\b'
 )
+# US-style date "5/24/26" or "05/24/2026" (M/D/YY or M/D/YYYY) used in headers
+# like "ALO 5/24/26".
+_US_DATE_RE = re.compile(
+    r'\b(0?[1-9]|1[0-2])/(0?[1-9]|[12]\d|3[01])/((?:19|20)?\d{2})\b'
+)
+
+
+def _extract_iso_date(text: str):
+    """Find a date anywhere in *text*. Returns (iso, start, end) or None.
+    Handles YYYY[-/. ]MM[-/. ]DD and US M/D/YY(YY)."""
+    m = _EMBEDDED_DATE_RE.search(text)
+    if m:
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        try:
+            from datetime import date as _date
+            return _date(y, mo, d).strftime("%Y-%m-%d"), m.start(), m.end()
+        except ValueError:
+            pass
+    m = _US_DATE_RE.search(text)
+    if m:
+        mo, d, yy = int(m.group(1)), int(m.group(2)), m.group(3)
+        year = int(yy) if len(yy) == 4 else (1900 + int(yy) if int(yy) >= 60 else 2000 + int(yy))
+        try:
+            from datetime import date as _date
+            return _date(year, mo, d).strftime("%Y-%m-%d"), m.start(), m.end()
+        except ValueError:
+            pass
+    return None
 
 
 def parse_etree_file(content: str) -> EtreeShow:
@@ -192,6 +220,8 @@ def parse_etree_file(content: str) -> EtreeShow:
         if pm:
             comment   = pm.group(1).strip()
             raw_title = raw_title[:pm.start()].strip()
+        # Strip a trailing footnote marker (e.g. "LAUNDRY*" → "LAUNDRY").
+        raw_title = re.sub(r'\s*[\*†‡^]+$', '', raw_title).strip()
         if current_set is None:
             current_set = EtreeSet(label="Set 1")
             show.sets.append(current_set)
@@ -218,6 +248,11 @@ def parse_etree_file(content: str) -> EtreeShow:
         # Unnumbered mode: treat a bare line as a track unless it looks like
         # the end of the setlist (lineup, source/lineage, key:value, divider).
         if not numbered:
+            # Skip repeated header blocks (some setlists re-print the
+            # artist/date/venue before each set). A line that contains a date
+            # or restates the artist/venue/location is not a track.
+            if _is_header_repeat(line, show):
+                continue
             if not stop_capture and _is_setlist_terminator(line):
                 stop_capture = True
             if stop_capture:
@@ -251,8 +286,34 @@ _KV_PREFIX_RE = re.compile(r'^[A-Za-z][\w /]{1,24}:\s', )
 _DIVIDER_RE   = re.compile(r'^[\*\-=_~#]{3,}\s*$')
 
 
+def _norm(s: str) -> str:
+    return re.sub(r'\s+', ' ', s).strip().lower().rstrip('.,')
+
+
+def _is_header_repeat(line: str, show: EtreeShow) -> bool:
+    """True if *line* re-prints the show header (artist/date/venue) mid-setlist.
+    Some setlists repeat the show info before each set."""
+    # A line carrying a date is a header repeat, not a track title.
+    if _extract_iso_date(line):
+        return True
+    n = _norm(line)
+    candidates = {_norm(show.artist), _norm(show.venue), _norm(show.location)}
+    if show.venue and show.location:
+        candidates.add(_norm(f"{show.venue} {show.location}"))
+        candidates.add(_norm(f"{show.venue}, {show.location}"))
+    candidates.discard('')
+    return n in candidates
+
+
+# A footnote line: "*ASHER", "* with Asher on guitar", "† guest". A single
+# leading footnote marker followed by text (not 3+ for a divider rule).
+_FOOTNOTE_RE = re.compile(r'^\s*[\*†‡^]\s*\S')
+
+
 def _is_setlist_terminator(line: str) -> bool:
     if _DIVIDER_RE.match(line):
+        return True
+    if _FOOTNOTE_RE.match(line):
         return True
     if _KV_PREFIX_RE.match(line):
         return True
@@ -323,19 +384,24 @@ def _parse_positional_header(show: EtreeShow, raw_lines: list[str]) -> None:
 
     # First try: a single line that jams artist + date + venue together, e.g.
     #   "The Rolling Stones 1999 06 08 Shepherds Bush Empire, London, UK"
-    # If line 1 has an embedded date, split around it and consume only line 1
-    # as the header — everything else is notes/source.
+    # If line 1 has an embedded date (ISO or US M/D/YY), split around it and
+    # consume only line 1 as the header — everything else is notes/source.
     header_consumed = 1
-    dm = _EMBEDDED_DATE_RE.search(nonblank[0])
+    dm = _extract_iso_date(nonblank[0])
     if dm:
-        y, mo, dy = dm.group(1), dm.group(2), dm.group(3)
-        show.date = f"{y}-{int(mo):02d}-{int(dy):02d}"
-        before = nonblank[0][:dm.start()].strip(" -,")
-        after  = nonblank[0][dm.end():].strip(" -,")
+        iso, d_start, d_end = dm
+        show.date = iso
+        before = nonblank[0][:d_start].strip(" -,")
+        after  = nonblank[0][d_end:].strip(" -,")
         if before:
             show.artist = before
         if after:
             _split_venue_location(show, after)
+        # When the date was on line 1 but the venue/location is on line 2
+        # (e.g. "ALO 5/24/26" / "HopMonk Novato, CA"), pull it in too.
+        if not show.venue and len(nonblank) >= 2 and not _SET_RE.match(nonblank[1]):
+            _split_venue_location(show, nonblank[1])
+            header_consumed = 2
     else:
         # Classic positional format: line1=Artist, line2=Date, line3=Venue,
         # and optionally line4=Location ("City, ST" / "City, Country").
