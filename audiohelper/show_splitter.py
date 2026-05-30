@@ -145,6 +145,7 @@ class WaveformView(tk.Frame):
         self._drag_idx: Optional[int] = None
         self._audio_path: Optional[Path] = None
         self._ffmpeg_path: Optional[Path] = None
+        self._decoding = False
         self._play_proc: Optional[subprocess.Popen] = None
         self._play_after: Optional[str] = None
         self._play_wall = 0.0
@@ -164,7 +165,7 @@ class WaveformView(tk.Frame):
                                   activebackground="#3a3a4a",
                                   relief="flat", padx=6)
         self.btn_play.pack(side="left", padx=(0, 2))
-        self.btn_stop = tk.Button(tr, text="⏹", width=4,
+        self.btn_stop = tk.Button(tr, text="Stop", width=5,
                                   command=self._stop, state="disabled",
                                   bg="#2a2a3a", fg="#dddddd",
                                   activebackground="#3a3a4a",
@@ -174,15 +175,16 @@ class WaveformView(tk.Frame):
                                  bg=self.BG_COLOR, font=("Consolas", 10),
                                  width=10, anchor="w")
         self.lbl_time.pack(side="left")
+        self._zoom_btns: list[tk.Button] = []
         for label, cmd in (("Fit", self._zoom_fit),
-                            ("−",   self._zoom_out),
+                            ("-",   self._zoom_out),
                             ("+",   self._zoom_in)):
             b = tk.Button(tr, text=label, command=cmd, state="disabled",
                           bg="#2a2a3a", fg="#dddddd",
                           activebackground="#3a3a4a",
                           relief="flat", width=4 if label == "Fit" else 3)
             b.pack(side="right", padx=1)
-            setattr(self, f"_btn_{label}", b)
+            self._zoom_btns.append(b)
 
         # Scrollbar
         self.hbar = ttk.Scrollbar(self, orient="horizontal",
@@ -212,18 +214,15 @@ class WaveformView(tk.Frame):
         self._markers = []
         self._cursor = 0.0
         self._scroll_start = 0.0
-        self._zoom = max(1.0, self._canvas_w() / duration) if duration else 1.0
-        for w in [self.btn_play, self.btn_stop,
-                  self._btn_Fit, self._btn_["−"], self._btn_["+"]]:
-            pass  # buttons stay disabled until decode done
+        self._decoding = True
         self._set_controls("disabled")
-        self._show_message("Decoding waveform…  (this may take a moment for large files)")
+        self._redraw()
         if status_cb:
-            status_cb("Decoding waveform…")
+            status_cb("Decoding waveform...  (large files may take 30-60 s)")
 
         def _worker():
-            samp = self._decode(path, ffmpeg)
-            self.after(0, lambda: self._on_loaded(samp, status_cb))
+            samp, err = self._decode(path, ffmpeg)
+            self.after(0, lambda: self._on_loaded(samp, err, status_cb))
 
         threading.Thread(target=_worker, daemon=True).start()
 
@@ -238,47 +237,53 @@ class WaveformView(tk.Frame):
 
     # ── Decode ────────────────────────────────────────────────────────────────
 
-    def _decode(self, path: Path, ffmpeg: Path) -> list[float]:
+    def _decode(self, path: Path, ffmpeg: Path) -> tuple[list[float], str]:
+        """Returns (samples, error_message). samples is [] on failure."""
         cmd = [str(ffmpeg), "-hide_banner", "-i", str(path),
                "-af", f"aresample={self._decode_rate}",
                "-ac", "1", "-f", "s16le", "-"]
         try:
             proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-            raw = proc.stdout.read()
+            raw, err_bytes = proc.communicate()
             proc.wait()
-        except Exception:
-            return []
+        except Exception as e:
+            return [], f"Could not launch ffmpeg: {e}"
+        if not raw:
+            err_text = err_bytes.decode("utf-8", errors="replace")[-300:] if err_bytes else ""
+            return [], f"ffmpeg produced no output.\n{err_text}"
         buf = array.array("h")
         try:
             buf.frombytes(raw[:len(raw) - len(raw) % 2])
-        except Exception:
-            return []
+        except Exception as e:
+            return [], f"Could not read PCM data: {e}"
         if not buf:
-            return []
-        # Subsample to at most 8 M values to keep memory reasonable
+            return [], "Empty audio buffer after decode."
         step = max(1, len(buf) // 8_000_000)
         if step > 1:
             buf = array.array("h", (buf[i] for i in range(0, len(buf), step)))
         peak = max(abs(v) for v in buf) or 1
-        return [abs(v) / peak for v in buf]
+        return [abs(v) / peak for v in buf], ""
 
-    def _on_loaded(self, samples: list[float], status_cb=None) -> None:
+    def _on_loaded(self, samples: list[float], error: str, status_cb=None) -> None:
+        self._decoding = False
         self._samples = samples
+        if not samples:
+            self._redraw()  # shows error overlay
+            msg = f"Waveform decode failed: {error}"
+            if status_cb:
+                status_cb(msg)
+            return
         self._set_controls("normal")
         self._zoom_fit()
         if status_cb:
-            label = f"Waveform loaded  ({len(samples):,} samples)"
-            status_cb(label)
+            status_cb(f"Waveform ready  ({len(samples):,} samples)")
 
     def _set_controls(self, state: str) -> None:
-        play_state = state if self._samples or state == "disabled" else "disabled"
-        self.btn_play.configure(state=play_state)
-        for attr in ("_btn_Fit", "_btn_−", "_btn_+"):
-            w = getattr(self, attr, None)
-            if w:
-                w.configure(state=state)
+        self.btn_play.configure(state=state)
+        for b in self._zoom_btns:
+            b.configure(state=state)
 
     # ── Drawing ───────────────────────────────────────────────────────────────
 
@@ -301,7 +306,7 @@ class WaveformView(tk.Frame):
                                 font=("Segoe UI", 12))
 
     def _redraw(self) -> None:
-        if not self._samples and self._duration == 0.0:
+        if not self._samples and self._duration == 0.0 and not self._decoding:
             return
         c = self.canvas
         c.delete("all")
@@ -313,6 +318,13 @@ class WaveformView(tk.Frame):
         # Background
         c.create_rectangle(0, 0, W, H, fill=self.BG_COLOR, outline="")
         c.create_rectangle(0, 0, W, RH, fill=self.RULER_BG, outline="")
+
+        # Loading / error overlay (drawn on top at the end if needed)
+        overlay_msg = ""
+        if self._decoding:
+            overlay_msg = "Decoding waveform...  (may take 30-60 s for large files)"
+        elif self._duration > 0 and not self._samples:
+            overlay_msg = "Waveform decode failed — check that ffmpeg is installed."
 
         # Time ruler
         if self._duration > 0:
@@ -374,6 +386,13 @@ class WaveformView(tk.Frame):
         if 0 <= cx <= W:
             c.create_line(cx, 0, cx, H,
                           fill=self.CURSOR_COLOR, width=1, dash=(3, 4))
+
+        # Overlay message (loading or error)
+        if overlay_msg:
+            c.create_rectangle(0, H // 2 - 18, W, H // 2 + 18,
+                               fill="#1e1e2e", outline="")
+            c.create_text(W // 2, H // 2, text=overlay_msg,
+                          fill="#aaaacc", font=("Segoe UI", 11), anchor="center")
 
         # Scrollbar
         if self._duration > 0 and self._zoom > 0:

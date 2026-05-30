@@ -55,6 +55,12 @@ class Tool:
             p = Path(sp)
             if p.exists():
                 return p
+        # Last resort: check common system locations not always in PATH
+        # (Homebrew on Apple Silicon, Homebrew on Intel, MacPorts, Linux /usr/bin)
+        for sysdir in ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"):
+            p = Path(sysdir) / exe_name
+            if p.exists():
+                return p
         return bundled  # non-existent; callers can detect via .exists()
 
     def current_version(self, config) -> Optional[str]:
