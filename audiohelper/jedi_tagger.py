@@ -339,6 +339,57 @@ class JediTaggerDialog(tk.Toplevel):
         nb.add(tab_setlist, text="Setlist")
         self._build_setlist_tab(tab_setlist)
 
+        # Tab 4: File Tags (read-only inspector for the selected file)
+        tab_tags = ttk.Frame(nb, padding=6)
+        nb.add(tab_tags, text="File Tags")
+        self._build_alltags_tab(tab_tags)
+
+    # Standard tag fields shown in the inspector, in mp3tag order.
+    # (key, friendly label)
+    _STD_TAG_FIELDS = [
+        ("TITLE",       "Title"),
+        ("ARTIST",      "Artist"),
+        ("ALBUM",       "Album"),
+        ("DATE",        "Year"),
+        ("TRACKNUMBER", "Track"),
+        ("TRACKTOTAL",  "Track Total"),
+        ("GENRE",       "Genre"),
+        ("COMMENT",     "Comment"),
+        ("ALBUMARTIST", "Album Artist"),
+        ("COMPOSER",    "Composer"),
+        ("DISCNUMBER",  "Disc Number"),
+        ("DISCTOTAL",   "Disc Total"),
+    ]
+
+    def _build_alltags_tab(self, parent: tk.Widget) -> None:
+        top = ttk.Frame(parent)
+        top.pack(fill="x", pady=(0, 4))
+        self._alltags_file_lbl = ttk.Label(
+            top, text="Select a file to see its tags.", foreground="gray")
+        self._alltags_file_lbl.pack(side="left")
+        ttk.Button(top, text="Refresh",
+                   command=self._refresh_alltags).pack(side="right")
+
+        cols = ("tag", "value")
+        self.tv_alltags = ttk.Treeview(parent, columns=cols, show="headings",
+                                       selectmode="browse")
+        self.tv_alltags.heading("tag",   text="Field", anchor="w")
+        self.tv_alltags.heading("value", text="Value", anchor="w")
+        self.tv_alltags.column("tag",   width=120, minwidth=80,  stretch=False, anchor="w")
+        self.tv_alltags.column("value", width=320, minwidth=120, stretch=True,  anchor="w")
+        self.tv_alltags.tag_configure("empty", foreground="#888888")
+        at_sb = ttk.Scrollbar(parent, orient="vertical", command=self.tv_alltags.yview)
+        self.tv_alltags.configure(yscrollcommand=at_sb.set)
+        at_sb.pack(side="right", fill="y")
+        self.tv_alltags.pack(fill="both", expand=True)
+
+        info = ttk.Label(
+            parent,
+            text="The standard tags on the selected file (read with ffprobe).\n"
+                 "Empty fields and untagged files are shown so you can see what's missing.",
+            foreground="gray", justify="left")
+        info.pack(anchor="w", pady=(4, 0))
+
     def _build_show_data_tab(self, parent: tk.Widget) -> None:
         # Text file status row
         txt_row = ttk.Frame(parent)
@@ -633,6 +684,40 @@ class JediTaggerDialog(tk.Toplevel):
         finally:
             self._loading_selection = False
         self.status.configure(text=f"Editing: {Path(path).name}")
+        self._refresh_alltags()
+
+    def _refresh_alltags(self) -> None:
+        """Show the standard mp3tag-style fields for the current file."""
+        if not hasattr(self, "tv_alltags"):
+            return
+        for iid in self.tv_alltags.get_children():
+            self.tv_alltags.delete(iid)
+        path = self._current_file
+        if not path:
+            self._alltags_file_lbl.configure(text="Select a file to see its tags.")
+            return
+        self._alltags_file_lbl.configure(text=Path(path).name)
+
+        # Prefer the cached orig tags; fall back to a fresh ffprobe read.
+        tags = self._per_file.get(path + "__orig__")
+        if tags is None:
+            ffprobe = get_tool("ffprobe").path(self.config_obj)
+            tags = tag_io.read_tags(Path(path), ffprobe) if ffprobe.exists() else {}
+
+        any_value = False
+        for key, label in self._STD_TAG_FIELDS:
+            val = str(tags.get(key, "")).strip() if tags else ""
+            if val:
+                any_value = True
+                if len(val) > 200:
+                    val = val[:200] + "…"
+                self.tv_alltags.insert("", "end", values=(label, val))
+            else:
+                self.tv_alltags.insert("", "end", values=(label, "—"),
+                                       tags=("empty",))
+        if not any_value:
+            self._alltags_file_lbl.configure(
+                text=f"{Path(path).name}  —  no standard tags (untagged file)")
 
     def _save_per_track(self, *_args) -> None:
         if self._loading_selection or not self._current_file:
