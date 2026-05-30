@@ -31,12 +31,14 @@ from .update_tools import UpdateToolsDialog
 from .action_picker import ActionPickerDialog
 
 # Optional drag-and-drop support via tkinterdnd2. App stays functional if absent.
+_DND_REASON = ""
 try:
     from tkinterdnd2 import TkinterDnD, DND_FILES  # type: ignore
     _DND_AVAILABLE = True
     _BaseTk = TkinterDnD.Tk
 except Exception:
     _DND_AVAILABLE = False
+    _DND_REASON = "not installed"
     DND_FILES = None  # type: ignore
     _BaseTk = tk.Tk  # type: ignore
 
@@ -47,10 +49,11 @@ class MainWindow(_BaseTk):  # type: ignore[misc,valid-type]
         try:
             super().__init__()
         except RuntimeError:
-            # tkdnd native library loaded by import but unusable at runtime
+            # tkdnd native library imported fine but unusable at runtime
             # (common on Apple Silicon with certain Python/Tk builds).
             # Fall back silently to plain tk.Tk.
             _DND_AVAILABLE = False
+            _DND_REASON = "native tkdnd library failed to load (Apple Silicon + Python 3.14 known issue)"
             tk.Tk.__init__(self)
         self.title("Trader's Little Jedi")
         self.config_obj = Config()
@@ -70,10 +73,14 @@ class MainWindow(_BaseTk):  # type: ignore[misc,valid-type]
             self._register_dnd()
             self.append_log("Drag-and-drop enabled. Drop files or folders onto this window.\n")
         else:
-            self.append_log(
-                "Drag-and-drop unavailable (tkinterdnd2 not importable).\n"
-                "  Install with:  pip install tkinterdnd2\n"
-            )
+            if _DND_REASON == "not installed":
+                self.append_log(
+                    "Drag-and-drop unavailable (tkinterdnd2 not installed).\n"
+                    "  Run the installer or:  pip install tkinterdnd2\n"
+                )
+            else:
+                self.append_log(f"Drag-and-drop unavailable ({_DND_REASON}).\n"
+                                "  Use File menus and the Add buttons instead.\n")
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
