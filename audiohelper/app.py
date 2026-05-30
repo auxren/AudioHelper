@@ -43,7 +43,15 @@ except Exception:
 
 class MainWindow(_BaseTk):  # type: ignore[misc,valid-type]
     def __init__(self):
-        super().__init__()
+        global _DND_AVAILABLE
+        try:
+            super().__init__()
+        except RuntimeError:
+            # tkdnd native library loaded by import but unusable at runtime
+            # (common on Apple Silicon with certain Python/Tk builds).
+            # Fall back silently to plain tk.Tk.
+            _DND_AVAILABLE = False
+            tk.Tk.__init__(self)
         self.title("Trader's Little Jedi")
         self.config_obj = Config()
         self.geometry(self.config_obj.get("window_geometry", "820x520"))
