@@ -110,10 +110,15 @@ class MainWindow(_BaseTk):  # type: ignore[misc,valid-type]
         except RuntimeError:
             # tkdnd native library imported fine but unusable at runtime
             # (common on Apple Silicon with certain Python/Tk builds).
-            # Fall back silently to plain tk.Tk.
+            # TkinterDnD.Tk.__init__ runs tkinter.Tk.__init__ FIRST (creating
+            # the real window) and only then calls _require(), which raises.
+            # So `self` is ALREADY a fully-initialized Tk window here — do NOT
+            # call tk.Tk.__init__ again, or it spawns a second interpreter and
+            # the first window is orphaned as a stray "tk" window.
             _DND_AVAILABLE = False
             _DND_REASON = "native tkdnd library failed to load (Apple Silicon + Python 3.14 known issue)"
-            tk.Tk.__init__(self)
+            if not getattr(self, "tk", None):
+                tk.Tk.__init__(self)
         self.title("Trader's Little Jedi")
         self.config_obj = Config()
         self.minsize(860, 620)
