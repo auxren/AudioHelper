@@ -32,13 +32,23 @@ class Tool:
     legacy: bool = False
 
     def path(self, config) -> Path:
+        import sys
         override = (config.get("tool_paths") or {}).get(self.name)
         if override:
             return Path(override)
         bundled = TOOLS_DIR / self.exe
-        if bundled.exists():
+        # On non-Windows, skip .exe binaries — they're Windows-only and will
+        # produce "Exec format error" if accidentally found in the tools/ folder.
+        bundled_usable = (bundled.exists() and
+                          (sys.platform == "win32" or
+                           bundled.suffix.lower() != ".exe"))
+        if bundled_usable:
             return bundled
-        on_path = shutil.which(self.exe)
+        # Strip .exe suffix when searching PATH on non-Windows
+        exe_name = self.exe
+        if sys.platform != "win32" and exe_name.lower().endswith(".exe"):
+            exe_name = exe_name[:-4]
+        on_path = shutil.which(exe_name)
         if on_path:
             return Path(on_path)
         for sp in self.system_paths:
