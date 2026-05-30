@@ -1,0 +1,5 @@
+# Development / build dependencies (not needed to run the app)
+-r requirements.txt
+pytest>=7
+pyinstaller>=6
+Pillow>=10.0
