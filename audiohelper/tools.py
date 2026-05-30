@@ -44,13 +44,17 @@ class Tool:
                            bundled.suffix.lower() != ".exe"))
         if bundled_usable:
             return bundled
-        # Strip .exe suffix when searching PATH on non-Windows
-        exe_name = self.exe
-        if sys.platform != "win32" and exe_name.lower().endswith(".exe"):
-            exe_name = exe_name[:-4]
-        on_path = shutil.which(exe_name)
-        if on_path:
-            return Path(on_path)
+        # Strip .exe suffix when searching PATH on non-Windows. Try both the
+        # original case and lowercase, since Unix binaries are usually lowercase
+        # (e.g. Windows "MediaInfo.exe" → Unix "mediainfo").
+        names = [self.exe]
+        if sys.platform != "win32" and self.exe.lower().endswith(".exe"):
+            base = self.exe[:-4]
+            names = [base, base.lower()]
+        for nm in names:
+            on_path = shutil.which(nm)
+            if on_path:
+                return Path(on_path)
         for sp in self.system_paths:
             p = Path(sp)
             if p.exists():
@@ -58,9 +62,10 @@ class Tool:
         # Last resort: check common system locations not always in PATH
         # (Homebrew on Apple Silicon, Homebrew on Intel, MacPorts, Linux /usr/bin)
         for sysdir in ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"):
-            p = Path(sysdir) / exe_name
-            if p.exists():
-                return p
+            for nm in names:
+                p = Path(sysdir) / nm
+                if p.exists():
+                    return p
         return bundled  # non-existent; callers can detect via .exists()
 
     def current_version(self, config) -> Optional[str]:
@@ -234,8 +239,27 @@ def _mediainfo_latest() -> Optional[str]:
 
 
 def _mediainfo_install(version: str) -> None:
-    # MediaInfo's GitHub Releases carry no binaries; mediaarea.net hosts the
-    # actual zips under a stable URL pattern keyed off the version number.
+    import sys
+    # On macOS / Linux, MediaInfo comes from the system package manager — the
+    # Windows .zip below is useless there. Use Homebrew on Mac.
+    if sys.platform != "win32":
+        brew = (shutil.which("brew")
+                or next((b for b in ("/opt/homebrew/bin/brew", "/usr/local/bin/brew")
+                         if Path(b).exists()), None))
+        if sys.platform == "darwin" and brew:
+            r = subprocess.run([brew, "install", "media-info"],
+                               capture_output=True, text=True, timeout=600)
+            if r.returncode != 0 and "already installed" not in (r.stderr + r.stdout).lower():
+                raise RuntimeError(f"brew install media-info failed: {r.stderr.strip()[:200]}")
+            return
+        apt = shutil.which("apt-get")
+        if apt:
+            raise RuntimeError("Install MediaInfo with:  sudo apt-get install mediainfo")
+        raise RuntimeError(
+            "MediaInfo auto-install needs Homebrew on macOS. Install Homebrew "
+            "(brew.sh) then run:  brew install media-info  — or install MediaInfo "
+            "from https://mediaarea.net/en/MediaInfo")
+    # Windows: mediaarea.net hosts the CLI zips keyed off the version number.
     url = (
         f"https://mediaarea.net/download/binary/mediainfo/{version}/"
         f"MediaInfo_CLI_{version}_Windows_x64.zip"

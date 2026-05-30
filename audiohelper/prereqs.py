@@ -27,14 +27,18 @@ from tkinter import ttk
 
 from .tools import get_tool
 
-# Tools that must be present for full functionality; shown in the prereq dialog
+# Tools that must be present for full functionality; shown in the prereq dialog.
+# mediainfo is intentionally NOT here — it's optional (only the "Show file
+# details" analysis view uses it; ffprobe covers everything else). Listing it
+# made the startup prereq dialog nag on every launch when it couldn't be
+# auto-installed on macOS. It can still be installed from Tools → Update all
+# CLI tools, or on demand when the details view is opened.
 REQUIRED_TOOL_NAMES = [
     "ffmpeg",
     "ffprobe",
     "flac",
     "metaflac",
     "lame",
-    "mediainfo",
 ]
 
 
