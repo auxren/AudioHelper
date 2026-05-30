@@ -14,3 +14,13 @@ config.json
 
 # Virtual environment (created by installer)
 .venv/
+
+# Build artifacts (PyInstaller / installers)
+build/
+dist/
+*.egg-info/
+assets/version_info.txt
+assets/icon.iconset/
+
+# Test cache
+.pytest_cache/

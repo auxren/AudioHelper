@@ -35,6 +35,12 @@ a = Analysis(
         # optional
         "PIL", "PIL.Image", "PIL.ImageTk",
         "tkinterdnd2",
+        # audiohelper submodules imported lazily inside functions
+        # (PyInstaller's static scan misses `from .x import Y` inside methods)
+        "audiohelper.batch_convert", "audiohelper.bulk_tagger",
+        "audiohelper.show_splitter", "audiohelper.jedi_tagger",
+        "audiohelper.live_tagger", "audiohelper.tc_tagger",
+        "audiohelper.tc_sources", "audiohelper.theme",
         # stdlib used dynamically
         "array", "json", "threading", "subprocess", "pathlib",
         "tempfile", "shutil", "re", "struct", "zlib",
@@ -42,7 +48,11 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["numpy", "scipy", "matplotlib", "IPython", "jupyter"],
+    # Exclude heavy/optional deps and the hidden HighGrabber subpackage
+    # (it's never imported by the GUI and would drag in playwright/httpx).
+    excludes=["numpy", "scipy", "matplotlib", "IPython", "jupyter",
+              "audiohelper.highgrabber", "playwright", "httpx", "keyring",
+              "pytest", "_pytest"],
     noarchive=False,
 )
 
