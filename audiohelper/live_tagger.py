@@ -40,20 +40,55 @@ def _should_ignore(filename: str) -> bool:
 
 
 def read_text_smart(p: "Path") -> str:
-    """Read a text file, trying UTF-8, then Windows-1252, then Latin-1.
+    """Read a text file, honoring BOMs (UTF-8/16/32) then trying UTF-8,
+    Windows-1252, and Latin-1.
 
-    Real-world eTree/info files are frequently saved in Windows-1252 (cp1252)
-    with smart quotes (’ “ ” – ). Decoding those as latin-1 turns them into
-    control characters (shown as �). cp1252 decodes them correctly.
+    Real-world eTree/info files come in many encodings: UTF-16 (Windows
+    Notepad "Unicode"), Windows-1252 with smart quotes, plain UTF-8. A
+    UTF-16 file read as cp1252 yields "ÿþ…" garbage from the BOM; latin-1
+    turns smart quotes into control characters (shown as �). Detect the
+    BOM first so those cases decode cleanly.
     """
     data = p.read_bytes()
+    if data[:3] == b"\xef\xbb\xbf":
+        return data[3:].decode("utf-8", errors="replace")
+    if data[:2] == b"\xff\xfe":
+        return data[2:].decode("utf-16-le", errors="replace")
+    if data[:2] == b"\xfe\xff":
+        return data[2:].decode("utf-16-be", errors="replace")
+    # No BOM: UTF-16 without a BOM often has many NUL bytes — sniff for it.
+    if b"\x00" in data[:200]:
+        try:
+            return data.decode("utf-16-le")
+        except UnicodeDecodeError:
+            try:
+                return data.decode("utf-16-be")
+            except UnicodeDecodeError:
+                pass
     for enc in ("utf-8", "cp1252", "latin-1"):
         try:
             return data.decode(enc)
         except UnicodeDecodeError:
             continue
-    # Last resort: never raise — replace undecodable bytes.
     return data.decode("utf-8", errors="replace")
+
+
+# Telltale markers of CD-ripper / player log files that get saved as .txt
+# alongside audio but are NOT eTree setlists (EAC, XLD, foobar2000, dBpoweramp,
+# EZ CD Audio Converter, CUETools, etc.). If a candidate .txt matches, skip it.
+_LOG_FILE_MARKERS = (
+    "exact audio copy", "eac extraction", "x lossless decoder",
+    "foobar2000", "ez cd audio", "dbpoweramp", "cuetools", "cuerip",
+    "accuraterip", "log creation date", "log date:", "tracks in playlist",
+    "playlist length", "analyzed folder", "used drive", "read mode",
+    "track quality", "copy crc", "test crc", "peak level",
+)
+
+
+def looks_like_log_file(text: str) -> bool:
+    """True if *text* is a ripper/player log, not a setlist info file."""
+    head = text[:2000].lower()
+    return any(m in head for m in _LOG_FILE_MARKERS)
 
 
 # ── eTree data structures ─────────────────────────────────────────────────────

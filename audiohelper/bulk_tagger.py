@@ -21,7 +21,9 @@ from typing import Optional
 
 from . import theme as _t
 from .action_picker import AUDIO_EXTS
-from .live_tagger import parse_etree_file, read_text_smart, _should_ignore
+from .live_tagger import (
+    parse_etree_file, read_text_smart, looks_like_log_file, _should_ignore,
+)
 from .tc_sources import detect_source
 from .tc_tagger import mutagen_available, read_tags_mutagen, write_tags
 from .tools import get_tool
@@ -125,6 +127,31 @@ def artist_from_folder(name: str) -> Optional[str]:
     return None
 
 
+_JUNK_ARTIST_MARKERS = (
+    "tracks in playlist", "playlist length", "log creation", "log date",
+    "analyzed folder", "audio converter", "foobar", "exact audio",
+    "x lossless", "dbpoweramp", "accuraterip", "device:", "used drive",
+)
+
+
+def _is_junk_artist(s: str) -> bool:
+    """True if a resolved artist string is obviously not a band name
+    (ripper-log line, BOM/divider junk, mostly punctuation, or a bare date)."""
+    if not s:
+        return True
+    low = s.lower()
+    if any(m in low for m in _JUNK_ARTIST_MARKERS):
+        return True
+    alpha = sum(c.isalpha() for c in s)
+    if alpha < 2:                       # "ÿþ-----", "----", "25569"
+        return True
+    if alpha < len(s) * 0.4:            # mostly punctuation/digits
+        return True
+    if re.fullmatch(r"[\d\s:.\-]+", s): # pure numbers/dates
+        return True
+    return False
+
+
 def city_region_from_folder(name: str) -> tuple[Optional[str], Optional[str]]:
     m = re.search(r",\s*([A-Z][A-Za-z.'\- ]+?),\s*([A-Z]{2})\b", name)
     if m and US_STATE_CODE.fullmatch(m.group(2)):
@@ -152,8 +179,11 @@ class ConcertFolder:
     discs: list[int] = field(default_factory=list)    # per-file disc number
     approved: bool = True
     note: str = ""
+    album_override: str = ""   # user-typed album; overrides computed album_name()
 
     def album_name(self) -> str:
+        if self.album_override:
+            return self.album_override
         parts: list[str] = []
         if self.date:
             parts.append(self.date)
@@ -229,12 +259,21 @@ def scan_library(root: Path) -> list["ConcertFolder"]:
     return concerts
 
 
-def _find_info_txt(folder: Path) -> Optional[Path]:
-    """Look for a setlist/info .txt in *folder*, then walk up to 2 parents."""
+def _find_info_txt(folder: Path) -> Optional[str]:
+    """Find a real setlist/info .txt in *folder* or up to 2 parents, skipping
+    CD-ripper / player log files (EAC, XLD, foobar, etc.). Returns the decoded
+    text content, or None."""
     for f in [folder, *list(folder.parents)[:2]]:
-        txts = sorted(p for p in f.glob("*.txt") if not _should_ignore(p.name))
-        if txts:
-            return txts[0]
+        for p in sorted(f.glob("*.txt")):
+            if _should_ignore(p.name):
+                continue
+            try:
+                content = read_text_smart(p)
+            except OSError:
+                continue
+            if looks_like_log_file(content):
+                continue
+            return content
     return None
 
 
@@ -250,11 +289,12 @@ def infer_concert(stub: "ConcertFolder", ffprobe: Optional[Path]) -> ConcertFold
 
     # 2) info.txt / setlist .txt — search this folder then up to 2 parents
     #    (multi-disc shows keep the setlist in the show root, not in CD1/CD2).
+    #    Ripper/player log files are skipped by _find_info_txt.
     show = None
-    txt = _find_info_txt(folder)
-    if txt:
+    content = _find_info_txt(folder)
+    if content:
         try:
-            show = parse_etree_file(read_text_smart(txt))
+            show = parse_etree_file(content)
         except Exception:
             show = None
 
@@ -262,13 +302,33 @@ def infer_concert(stub: "ConcertFolder", ffprobe: Optional[Path]) -> ConcertFold
     names = [folder.name] + [p.name for p in folder.parents[:2]]
     name_blob = "  ".join(names)
 
-    # Resolve fields with precedence: setlist text > existing tags > folder name
-    c.artist = (show.artist if show and show.artist else "") \
-        or existing.get("ARTIST", "") or existing.get("ALBUMARTIST", "") \
-        or (artist_from_folder(folder.name) or artist_from_folder(name_blob) or "")
-    c.date = (show.date if show and show.date else "") \
-        or existing.get("DATE", "") \
-        or (parse_date_from(folder.name) or parse_date_from(name_blob) or "")
+    # Resolve artist with precedence setlist > tags > folder name, rejecting
+    # junk (ripper-log lines, BOM/divider garbage) at each step.
+    c.artist = ""
+    for cand in (show.artist if show else "",
+                 existing.get("ARTIST", ""), existing.get("ALBUMARTIST", ""),
+                 artist_from_folder(folder.name), artist_from_folder(name_blob)):
+        if cand and not _is_junk_artist(cand):
+            c.artist = cand.strip()
+            break
+    # Date: accept a candidate only if it actually contains a parseable date,
+    # and normalize to ISO. This rejects info.txt header junk like a tour name
+    # or venue line that landed in the "date" slot, falling back to the date
+    # embedded in the folder name (which is reliable for taped shows).
+    c.date = ""
+    for cand in (show.date if show else "", existing.get("DATE", ""),
+                 folder.name, name_blob):
+        iso = parse_date_from(cand) if cand else None
+        if iso:
+            c.date = iso
+            break
+    if not c.date:
+        # Fall back to a bare 4-digit year (studio albums, undated shows).
+        for cand in (existing.get("DATE", ""), folder.name):
+            m = re.search(r"(?<!\d)((?:19|20)\d{2})(?!\d)", cand or "")
+            if m:
+                c.date = m.group(1)
+                break
     c.venue = (show.venue if show and show.venue else "") or existing.get("VENUE", "")
     if show and show.location:
         # location is "City, Region"
@@ -413,13 +473,13 @@ class BulkTaggerDialog(tk.Toplevel):
         cols = ("ok", "conf", "folder", "artist", "date", "album", "tracks")
         self.tv = ttk.Treeview(body, columns=cols, show="headings",
                                selectmode="browse")
-        heads = [("ok", "✓", 32), ("conf", "Conf", 50), ("folder", "Folder", 200),
-                 ("artist", "Artist", 150), ("date", "Date", 90),
-                 ("album", "Proposed album", 320), ("tracks", "Trk", 50)]
+        heads = [("ok", "✓", 32), ("conf", "Conf", 50), ("folder", "Folder", 190),
+                 ("artist", "Proposed Artist", 170), ("date", "Date", 90),
+                 ("album", "Proposed Album", 320), ("tracks", "Trk", 46)]
         for key, label, w in heads:
             self.tv.heading(key, text=label, anchor="w")
             self.tv.column(key, width=w, minwidth=30,
-                           stretch=(key in ("album", "folder")),
+                           stretch=(key in ("album", "folder", "artist")),
                            anchor="center" if key in ("ok", "conf", "tracks") else "w")
         self.tv.tag_configure("approved", foreground=_t.LOG_OK)
         self.tv.tag_configure("skipped",  foreground=_t.FG_DIM)
@@ -429,7 +489,14 @@ class BulkTaggerDialog(tk.Toplevel):
         sb.pack(side="right", fill="y")
         self.tv.pack(fill="both", expand=True)
         self.tv.bind("<space>", self._toggle_selected)
-        self.tv.bind("<Double-1>", self._toggle_selected)
+        self.tv.bind("<Double-1>", self._on_double_click)
+        self._cell_editor: Optional[tk.Entry] = None
+
+        hint = ttk.Label(
+            body, style="Dim.TLabel",
+            text="Double-click ✓ to toggle approval · double-click "
+                 "Proposed Artist / Proposed Album to edit")
+        hint.pack(fill="x", side="bottom", pady=(2, 0))
 
     def _build_bottom(self) -> None:
         bar = ttk.Frame(self, padding=(8, 4))
@@ -499,7 +566,7 @@ class BulkTaggerDialog(tk.Toplevel):
                                    "Space/double-click to toggle a row.")
         self.btn_apply.configure(state="normal" if n else "disabled")
 
-    # ── Selection toggles ─────────────────────────────────────────────────────
+    # ── Selection toggles & inline editing ────────────────────────────────────
 
     def _toggle_selected(self, _evt=None) -> str:
         sel = self.tv.selection()
@@ -510,6 +577,69 @@ class BulkTaggerDialog(tk.Toplevel):
         c.approved = not c.approved
         self._update_row(idx)
         return "break"
+
+    def _on_double_click(self, event) -> str:
+        """Route a double-click: ✓ column toggles, artist/album columns edit."""
+        self._close_cell_editor()
+        row = self.tv.identify_row(event.y)
+        col = self.tv.identify_column(event.x)  # like '#4'
+        if not row:
+            return "break"
+        idx = int(row)
+        if col == "#1":  # ✓ approval column
+            c = self._concerts[idx]
+            c.approved = not c.approved
+            self._update_row(idx)
+            return "break"
+        if col in ("#4", "#6"):  # Proposed Artist / Proposed Album
+            self._open_cell_editor(idx, col, event)
+        return "break"
+
+    def _open_cell_editor(self, idx: int, col: str, event) -> None:
+        bbox = self.tv.bbox(str(idx), col)
+        if not bbox:
+            return
+        x, y, w, h = bbox
+        c = self._concerts[idx]
+        current = c.artist if col == "#4" else c.album_name()
+
+        editor = tk.Entry(self.tv, relief="solid", borderwidth=1,
+                          bg=_t.BG_WIDGET, fg=_t.FG_PRIMARY,
+                          insertbackground=_t.FG_PRIMARY,
+                          highlightthickness=1, highlightcolor=_t.ACCENT_PRIMARY)
+        editor.place(x=x, y=y, width=w, height=h)
+        editor.insert(0, current)
+        editor.select_range(0, "end")
+        editor.focus_set()
+        self._cell_editor = editor
+        self._cell_editor_target = (idx, col)
+
+        editor.bind("<Return>",   lambda _e: self._commit_cell_editor())
+        editor.bind("<KP_Enter>", lambda _e: self._commit_cell_editor())
+        editor.bind("<Escape>",   lambda _e: self._close_cell_editor())
+        editor.bind("<FocusOut>", lambda _e: self._commit_cell_editor())
+
+    def _commit_cell_editor(self) -> None:
+        if not self._cell_editor:
+            return
+        value = self._cell_editor.get().strip()
+        idx, col = self._cell_editor_target
+        c = self._concerts[idx]
+        if col == "#4":
+            c.artist = value
+        elif col == "#6":
+            c.album_override = value
+        self._close_cell_editor()
+        self._update_row(idx)
+
+    def _close_cell_editor(self) -> None:
+        if self._cell_editor is not None:
+            ed = self._cell_editor
+            self._cell_editor = None      # prevent FocusOut re-entrancy
+            try:
+                ed.destroy()
+            except Exception:
+                pass
 
     def _set_all(self, approved: bool) -> None:
         for idx, c in enumerate(self._concerts):
@@ -525,9 +655,15 @@ class BulkTaggerDialog(tk.Toplevel):
     def _update_row(self, idx: int) -> None:
         c = self._concerts[idx]
         conf = c.confidence()
-        vals = list(self.tv.item(str(idx), "values"))
-        vals[0] = "☑" if c.approved else "☐"
-        self.tv.item(str(idx), values=vals, tags=(self._row_tag(c, conf),))
+        self.tv.item(str(idx), values=(
+            "☑" if c.approved else "☐",
+            f"{conf:.2f}",
+            c.folder.name,
+            c.artist or "—",
+            c.date or "—",
+            c.album_name() or "—",
+            len(c.audio_files),
+        ), tags=(self._row_tag(c, conf),))
 
     # ── Apply ─────────────────────────────────────────────────────────────────
 
