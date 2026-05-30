@@ -94,6 +94,21 @@ SESSION_EXT = ".tljsplit"
 _SESSION_HEADER = "# Trader's Little Jedi — Show Split Session (v1)"
 
 
+def _session_filetypes():
+    """File-dialog filters that are safe on macOS.
+
+    macOS's native open/save panel (Tk 9 + Aqua) crashes when given a custom,
+    unrecognized extension like '*.tljsplit'. So on macOS we only offer
+    recognized patterns ('all files', '*.txt') and rely on the default
+    extension when saving. Other platforms get the explicit filter.
+    """
+    import sys
+    if sys.platform == "darwin":
+        return [("All files", "*"), ("Text files", "*.txt")]
+    return [("Show split session", f"*{SESSION_EXT}"),
+            ("Text files", "*.txt"), ("All files", "*.*")]
+
+
 def serialize_session(audio_path, meta: dict, tracks: list) -> str:
     """Render a human-readable, hand-editable session file.
 
@@ -1568,7 +1583,7 @@ class ShowSplitterDialog(tk.Toplevel):
             parent=self, title="Save split session",
             initialdir=initial_dir, initialfile=default + SESSION_EXT,
             defaultextension=SESSION_EXT,
-            filetypes=[("TLJ split session", f"*{SESSION_EXT}"), ("All files", "*.*")])
+            filetypes=_session_filetypes())
         if not out:
             return
         try:
@@ -1582,8 +1597,7 @@ class ShowSplitterDialog(tk.Toplevel):
         f = filedialog.askopenfilename(
             parent=self, title="Load split session",
             initialdir=self.config_obj.get("last_input_dir") or None,
-            filetypes=[("TLJ split session", f"*{SESSION_EXT}"),
-                       ("Text files", "*.txt"), ("All files", "*.*")])
+            filetypes=_session_filetypes())
         if not f:
             return
         try:
