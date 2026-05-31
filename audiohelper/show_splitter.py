@@ -24,7 +24,9 @@ from typing import Optional
 
 from . import theme as _t
 from .action_picker import AUDIO_EXTS
-from .live_tagger import EtreeShow, parse_etree_file, read_text_smart
+from .live_tagger import (
+    EtreeShow, parse_etree_file, read_text_smart, generate_etree_file,
+)
 from .tc_sources import detect_source
 from .tc_tagger import mutagen_available, write_tags as mutagen_write_tags
 from .tools import get_tool
@@ -1101,6 +1103,29 @@ class ShowSplitterDialog(tk.Toplevel):
         self.lbl_name_preview.pack(side="right")
         ttk.Label(name_bar, text="e.g.", style="Dim.TLabel").pack(side="right", padx=(0, 4))
 
+        # ── Package row: what to put in the finished folder ───────────────────
+        pkg = ttk.LabelFrame(self, text="Also create in the output folder", padding=(8, 4))
+        pkg.pack(fill="x", side="bottom")
+        self.var_pkg_txt     = tk.BooleanVar(value=True)
+        self.var_pkg_ffp     = tk.BooleanVar(value=True)
+        self.var_pkg_md5     = tk.BooleanVar(value=False)
+        self.var_pkg_embed   = tk.BooleanVar(value=True)
+        self.var_pkg_torrent = tk.BooleanVar(value=False)
+        ttk.Checkbutton(pkg, text="Setlist .txt", variable=self.var_pkg_txt).pack(side="left")
+        ttk.Checkbutton(pkg, text="FFP checksum", variable=self.var_pkg_ffp).pack(side="left", padx=(10, 0))
+        ttk.Checkbutton(pkg, text="MD5", variable=self.var_pkg_md5).pack(side="left", padx=(10, 0))
+        ttk.Separator(pkg, orient="vertical").pack(side="left", fill="y", padx=8)
+        ttk.Label(pkg, text="Cover:").pack(side="left")
+        self.var_cover = tk.StringVar()
+        ttk.Entry(pkg, textvariable=self.var_cover, width=18).pack(side="left", padx=(4, 2))
+        ttk.Button(pkg, text="…", width=2, command=self._browse_cover).pack(side="left")
+        ttk.Checkbutton(pkg, text="embed", variable=self.var_pkg_embed).pack(side="left", padx=(4, 0))
+        ttk.Separator(pkg, orient="vertical").pack(side="left", fill="y", padx=8)
+        ttk.Checkbutton(pkg, text="Torrent", variable=self.var_pkg_torrent).pack(side="left")
+        self.var_tracker = tk.StringVar(value=self.config_obj.get("torrent_default_tracker_url", ""))
+        ttk.Entry(pkg, textvariable=self.var_tracker, width=22).pack(side="left", padx=(4, 0))
+        ttk.Label(pkg, text="tracker URL", style="Dim.TLabel").pack(side="left", padx=(4, 0))
+
         # ── Output folder / format / actions row ──────────────────────────────
         bar = ttk.Frame(self, padding=(8, 4))
         bar.pack(fill="x", side="bottom")
@@ -1115,7 +1140,8 @@ class ShowSplitterDialog(tk.Toplevel):
             ttk.Radiobutton(bar, text=fmt, variable=self.var_fmt, value=fmt).pack(side="left", padx=2)
         ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=8)
         ttk.Button(bar, text="Close", command=self.destroy).pack(side="right")
-        self.btn_split = ttk.Button(bar, text="Split & Tag",
+        self.btn_split = ttk.Button(bar, text="Split & Package",
+                                    style="Action.TButton",
                                     command=self._split_and_tag, state="disabled")
         self.btn_split.pack(side="right", padx=4)
         self.progress = ttk.Progressbar(bar, mode="determinate", length=180)
@@ -1550,6 +1576,14 @@ class ShowSplitterDialog(tk.Toplevel):
         if d:
             self.var_outdir.set(d)
 
+    def _browse_cover(self) -> None:
+        f = filedialog.askopenfilename(
+            parent=self, title="Select cover image",
+            initialdir=(str(self._audio_path.parent) if self._audio_path else None),
+            filetypes=[("Images", "*.jpg *.jpeg *.png"), ("All files", "*")])
+        if f:
+            self.var_cover.set(f)
+
     def _update_split_btn(self) -> None:
         ok = bool(self._audio_path and self._tracks and self.var_outdir.get())
         self.btn_split.configure(state="normal" if ok else "disabled")
@@ -1669,19 +1703,35 @@ class ShowSplitterDialog(tk.Toplevel):
             "ABBREV":   self._field_vars["ABBREV"].get().strip(),
         }
         template = self.var_nametpl.get().strip() or DEFAULT_NAME_TEMPLATE
-        # Remember the template for next time.
+        # Remember the template + tracker for next time.
         self.config_obj["splitter_name_template"] = template
+        if self.var_tracker.get().strip():
+            self.config_obj["torrent_default_tracker_url"] = self.var_tracker.get().strip()
         self.config_obj.save()
+        pkg = {
+            "txt":     self.var_pkg_txt.get(),
+            "ffp":     self.var_pkg_ffp.get(),
+            "md5":     self.var_pkg_md5.get(),
+            "embed":   self.var_pkg_embed.get(),
+            "torrent": self.var_pkg_torrent.get(),
+            "cover":   self.var_cover.get().strip(),
+            "tracker": self.var_tracker.get().strip(),
+        }
+        if pkg["torrent"] and not pkg["tracker"]:
+            messagebox.showerror("Show Splitter",
+                                 "Enter a tracker URL to create a torrent, or uncheck Torrent.")
+            self.btn_split.configure(state="normal")
+            return
         threading.Thread(
             target=self._worker,
             args=(ffmpeg, list(self._tracks), fields, template,
-                  self.var_fmt.get(), outdir, self._duration),
+                  self.var_fmt.get(), outdir, self._duration, pkg),
             daemon=True,
         ).start()
 
     def _worker(self, ffmpeg: Path, tracks: list[SplitTrack],
                 fields: dict, template: str, fmt: str, outdir: Path,
-                total_dur: float) -> None:
+                total_dur: float, pkg: dict) -> None:
         ext = {"FLAC": ".flac", "WAV": ".wav", "MP3": ".mp3"}.get(fmt, ".flac")
         src_info = detect_source(fields.get("SOURCE", ""))
         src_label = src_info.label()
@@ -1701,6 +1751,7 @@ class ShowSplitterDialog(tk.Toplevel):
         # Per-disc running track number for the eTree d{D}t{n} filename.
         disc_counter: dict[int, int] = {}
         ok, errors = 0, []
+        written: list[Path] = []   # output files, for checksum/cover/torrent
 
         for i, track in enumerate(tracks):
             disc_counter[track.disc] = disc_counter.get(track.disc, 0) + 1
@@ -1761,19 +1812,132 @@ class ShowSplitterDialog(tk.Toplevel):
                     mutagen_write_tags(out, tag_dict)
                 except Exception as e:
                     errors.append(f"{fname} [tag]: {e}")
+            written.append(out)
             ok += 1
             self.after(0, lambda v=i+1: self.progress.configure(value=v))
 
-        self.after(0, lambda: self._done(ok, errors))
+        # ── Packaging: cover, checksum, setlist .txt, torrent ────────────────
+        extras = self._package(outdir, written, fields, fmt, album, pkg, errors)
 
-    def _done(self, ok: int, errors: list[str]) -> None:
+        self.after(0, lambda: self._done(ok, errors, extras))
+
+    def _package(self, outdir: Path, written: list, fields: dict, fmt: str,
+                 album: str, pkg: dict, errors: list) -> list[str]:
+        """Post-split steps that build the rest of the share-ready folder.
+        Returns a list of created extra filenames for the summary."""
+        extras: list[str] = []
+        if not written:
+            return extras
+        folder_name = outdir.name
+
+        def _status(msg):
+            self.after(0, lambda: self.status.configure(text=msg))
+
+        # 1) Cover art → copy into the folder (cover.jpg) and embed in FLACs.
+        cover = pkg.get("cover")
+        if cover and Path(cover).exists():
+            _status("Adding cover art…")
+            try:
+                import shutil
+                dest = outdir / ("cover" + Path(cover).suffix.lower())
+                if Path(cover).resolve() != dest.resolve():
+                    shutil.copy2(cover, dest)
+                extras.append(dest.name)
+                if pkg.get("embed") and fmt == "FLAC":
+                    metaflac = get_tool("metaflac").path(self.config_obj)
+                    if metaflac.exists():
+                        # Bare filename → metaflac auto-detects MIME/resolution
+                        # and defaults to type 3 (front cover).
+                        for fp in written:
+                            subprocess.run(
+                                [str(metaflac), f"--import-picture-from={dest}", str(fp)],
+                                capture_output=True,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            except Exception as e:
+                errors.append(f"cover: {e}")
+
+        # 2) Setlist / info .txt named after the folder.
+        if pkg.get("txt"):
+            _status("Writing setlist .txt…")
+            try:
+                show = EtreeShow(
+                    artist=fields.get("ARTIST", ""), date=fields.get("DATE", ""),
+                    venue=fields.get("VENUE", ""), location=fields.get("LOCATION", ""),
+                    source=fields.get("SOURCE", ""))
+                # Rebuild sets/tracks from the current track list.
+                from .live_tagger import EtreeSet, EtreeTrack
+                by_disc: dict[int, EtreeSet] = {}
+                gi = 0
+                for t in self._tracks:
+                    gi += 1
+                    s = by_disc.get(t.disc)
+                    if s is None:
+                        s = EtreeSet(label=f"Set {t.disc}")
+                        by_disc[t.disc] = s
+                        show.sets.append(s)
+                    s.tracks.append(EtreeTrack(global_index=gi,
+                                               set_index=len(s.tracks) + 1,
+                                               title=t.title))
+                txt_path = outdir / f"{folder_name}.txt"
+                txt_path.write_text(generate_etree_file(show), encoding="utf-8")
+                extras.append(txt_path.name)
+            except Exception as e:
+                errors.append(f"setlist txt: {e}")
+
+        # 3) Checksums (FFP for FLAC, MD5 for any).
+        if pkg.get("ffp") and fmt == "FLAC":
+            _status("Creating FFP checksum…")
+            try:
+                from . import checksums as _ck
+                metaflac = get_tool("metaflac").path(self.config_obj)
+                entries = [(fp.name, _ck.flac_fingerprint(fp, metaflac)) for fp in written]
+                ffp_path = outdir / f"{folder_name}.ffp"
+                _ck.write_ffp(entries, ffp_path)
+                extras.append(ffp_path.name)
+            except Exception as e:
+                errors.append(f"ffp: {e}")
+        if pkg.get("md5"):
+            _status("Creating MD5 checksum…")
+            try:
+                from . import checksums as _ck
+                entries = [(fp.name, _ck.md5sum(fp)) for fp in written]
+                md5_path = outdir / f"{folder_name}.md5"
+                _ck.write_md5(entries, md5_path)
+                extras.append(md5_path.name)
+            except Exception as e:
+                errors.append(f"md5: {e}")
+
+        # 4) Torrent of the finished folder (written to the PARENT so it isn't
+        #    hashed into itself).
+        if pkg.get("torrent") and pkg.get("tracker"):
+            _status("Creating torrent (hashing folder)…")
+            try:
+                from . import torrent as _tor
+                data = _tor.create_torrent(
+                    outdir, [pkg["tracker"]], private=True,
+                    comment=album or folder_name)
+                tor_path = outdir.parent / f"{folder_name}.torrent"
+                tor_path.write_bytes(data)
+                extras.append(f"../{tor_path.name}")
+            except Exception as e:
+                errors.append(f"torrent: {e}")
+
+        return extras
+
+    def _done(self, ok: int, errors: list[str], extras: list[str] = None) -> None:
+        extras = extras or []
         self.btn_split.configure(state="normal")
+        extra_line = ("\n\nAlso created: " + ", ".join(extras)) if extras else ""
         if errors:
             messagebox.showerror(
                 "Show Splitter",
-                f"Split {ok} track(s). {len(errors)} failed:\n\n" + "\n".join(errors[:10]))
+                f"Split {ok} track(s). {len(errors)} issue(s):\n\n"
+                + "\n".join(errors[:10]) + extra_line)
         else:
-            messagebox.showinfo("Show Splitter",
-                                f"Split and tagged {ok} track(s) successfully.")
-        self.status.configure(text=f"Done. {ok} tracks written, {len(errors)} failed.")
+            messagebox.showinfo(
+                "Show Splitter",
+                f"Split and tagged {ok} track(s) successfully.{extra_line}")
+        self.status.configure(
+            text=f"Done. {ok} tracks + {len(extras)} extra file(s), "
+                 f"{len(errors)} issue(s).")
         self.progress.configure(value=0)
