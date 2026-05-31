@@ -233,3 +233,19 @@ Trader's Little Jedi is licensed under
 You are free to **use, copy, modify, fork, and share** it for any
 **non-commercial** purpose, as long as you give appropriate **attribution**.
 **Commercial use is not permitted.** See [LICENSE](LICENSE) for the full text.
+
+---
+
+## Credits
+
+Trader's Little Jedi began as a fork of **[kskreider](https://github.com/kskreider)'s
+Audio Helper**, and owes its foundation to his work. The original project's
+structure, the TLH-style toolset (encode/decode, checksums, torrents, SBE
+fixing, analysis), and much of the core design came from him. Huge thanks to
+**kskreider** for building that base and sharing it — this project wouldn't
+exist without it.
+
+Additional building blocks: tag inference and source/mic detection adapted from
+[TagCleaner](https://github.com/auxren/TagCleaner); UI/design cues from
+ConcertTagger and HighGrabber. Inspired by Trader's Little Helper, XLD, XACT,
+and foo_tradersfriend.
