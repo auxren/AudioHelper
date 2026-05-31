@@ -5,11 +5,18 @@
 
 import sys
 from pathlib import Path
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 
 IS_MAC = sys.platform == "darwin"
 IS_WIN = sys.platform == "win32"
 
 ROOT = Path(SPECPATH)
+
+# internetarchive (LMA upload) is imported lazily and has submodules + data
+# files (its metadata schemas). Collect them so the bundled app can upload.
+# Returns [] cleanly if the package isn't installed in the build venv.
+_IA_HIDDEN = collect_submodules("internetarchive")
+_IA_DATA = collect_data_files("internetarchive")
 
 # ── Analysis ──────────────────────────────────────────────────────────────────
 a = Analysis(
@@ -21,7 +28,7 @@ a = Analysis(
         (str(ROOT / "trackers.txt"),  "."),
         # Windows: bundle the CLI tools folder
         # (str(ROOT / "tools"), "tools"),   # uncomment on Windows if tools/ is populated
-    ],
+    ] + _IA_DATA,
     hiddenimports=[
         # tkinter — collected by hook but list explicitly to be safe
         "tkinter", "tkinter.ttk", "tkinter.filedialog",
@@ -40,11 +47,11 @@ a = Analysis(
         "audiohelper.batch_convert", "audiohelper.bulk_tagger",
         "audiohelper.show_splitter", "audiohelper.jedi_tagger",
         "audiohelper.live_tagger", "audiohelper.tc_tagger",
-        "audiohelper.tc_sources", "audiohelper.theme",
+        "audiohelper.tc_sources", "audiohelper.theme", "audiohelper.lma_upload",
         # stdlib used dynamically
         "array", "json", "threading", "subprocess", "pathlib",
-        "tempfile", "shutil", "re", "struct", "zlib",
-    ],
+        "tempfile", "shutil", "re", "struct", "zlib", "webbrowser",
+    ] + _IA_HIDDEN,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

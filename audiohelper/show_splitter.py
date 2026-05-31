@@ -1123,8 +1123,12 @@ class ShowSplitterDialog(tk.Toplevel):
         ttk.Separator(pkg, orient="vertical").pack(side="left", fill="y", padx=8)
         ttk.Checkbutton(pkg, text="Torrent", variable=self.var_pkg_torrent).pack(side="left")
         self.var_tracker = tk.StringVar(value=self.config_obj.get("torrent_default_tracker_url", ""))
-        ttk.Entry(pkg, textvariable=self.var_tracker, width=22).pack(side="left", padx=(4, 0))
+        ttk.Entry(pkg, textvariable=self.var_tracker, width=18).pack(side="left", padx=(4, 0))
         ttk.Label(pkg, text="tracker URL", style="Dim.TLabel").pack(side="left", padx=(4, 0))
+        ttk.Separator(pkg, orient="vertical").pack(side="left", fill="y", padx=8)
+        self.var_pkg_lma = tk.BooleanVar(value=False)
+        ttk.Checkbutton(pkg, text="Upload to Archive.org (LMA) after",
+                        variable=self.var_pkg_lma).pack(side="left")
 
         # ── Output folder / format / actions row ──────────────────────────────
         bar = ttk.Frame(self, padding=(8, 4))
@@ -1722,6 +1726,9 @@ class ShowSplitterDialog(tk.Toplevel):
                                  "Enter a tracker URL to create a torrent, or uncheck Torrent.")
             self.btn_split.configure(state="normal")
             return
+        # Remember for a post-package LMA upload.
+        self._pkg_outdir = outdir
+        self._pkg_fields = fields
         threading.Thread(
             target=self._worker,
             args=(ffmpeg, list(self._tracks), fields, template,
@@ -1941,3 +1948,25 @@ class ShowSplitterDialog(tk.Toplevel):
             text=f"Done. {ok} tracks + {len(extras)} extra file(s), "
                  f"{len(errors)} issue(s).")
         self.progress.configure(value=0)
+        # Optional: hand the finished folder to the Archive.org upload dialog.
+        if ok > 0 and getattr(self, "var_pkg_lma", None) and self.var_pkg_lma.get():
+            self._open_lma_upload()
+
+    def _open_lma_upload(self) -> None:
+        from .lma_upload import LmaUploadDialog
+        outdir = getattr(self, "_pkg_outdir", None) or Path(self.var_outdir.get())
+        fields = getattr(self, "_pkg_fields", {})
+        # Build a setlist description from the current track list.
+        lines = []
+        for t in self._tracks:
+            lines.append(f"{t.number}. {t.title}")
+        meta = {
+            "artist":   fields.get("ARTIST", self._field_vars["ARTIST"].get().strip()),
+            "date":     fields.get("DATE", self._field_vars["DATE"].get().strip()),
+            "venue":    fields.get("VENUE", self._field_vars["VENUE"].get().strip()),
+            "location": fields.get("LOCATION", self._field_vars["LOCATION"].get().strip()),
+            "source":   fields.get("SOURCE", self._source_widget.get("1.0", "end").strip()),
+            "abbrev":   self._field_vars["ABBREV"].get().strip(),
+            "description": "\n".join(lines),
+        }
+        LmaUploadDialog(self, self.config_obj, self.runner, folder=outdir, meta=meta)

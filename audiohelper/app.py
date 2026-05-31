@@ -598,12 +598,18 @@ class MainWindow(_BaseTk):  # type: ignore[misc,valid-type]
         menu.add_command(label="Decode audio files",
                          command=self._open_decode)
         menu.add_separator()
+        menu.add_command(label="Upload folder to Archive.org (LMA)…",
+                         command=self._open_lma_upload)
         menu.add_command(label="Update all CLI tools…",
                          command=self._open_update_tools)
         try:
             menu.tk_popup(self.winfo_pointerx(), self.winfo_pointery())
         finally:
             menu.grab_release()
+
+    def _open_lma_upload(self) -> None:
+        from .lma_upload import LmaUploadDialog
+        LmaUploadDialog(self, self.config_obj, self.runner)
 
     def _open_encode_wav(self) -> None:
         EncodeWavDialog(self, self.config_obj, self.runner)

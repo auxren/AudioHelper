@@ -60,7 +60,7 @@ fi
 PY="$VENV/bin/python3"
 PIP="$VENV/bin/pip"
 "$PIP" install --upgrade pip --quiet
-"$PIP" install pyinstaller pillow mutagen --quiet
+"$PIP" install pyinstaller pillow mutagen internetarchive --quiet
 ok "Dependencies ready."
 
 # ── Step 2: Generate icons ────────────────────────────────────────────────────
