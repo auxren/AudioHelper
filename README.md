@@ -77,9 +77,17 @@ Turn one full-show WAV/FLAC into individual, tagged tracks.
 - **Save session… / Load session…** — store the markers, titles, metadata, and
   template in a small, hand-editable `.tljsplit` text file you can reopen and
   refine later.
-- **Split & Tag** writes one FLAC/WAV/MP3 per track, fully tagged (artist, date,
-  venue, source, title, per-disc track numbers). Album name format:
-  `DATE Venue, City, State` (e.g. `2026-05-24 HopMonk Tavern, Novato, CA`).
+- **Split & Package** — one button takes the tape to a share-ready folder. It
+  writes one FLAC/WAV/MP3 per track (fully tagged; album name
+  `DATE Venue, City, State`, e.g. `2026-05-24 HopMonk Tavern, Novato, CA`), then
+  optionally adds the **setlist .txt**, **FFP/MD5 checksums**, a **cover image**
+  (copied in and embedded in each FLAC), and a private **.torrent** — and can
+  hand the folder straight to the **Live Music Archive upload** (below).
+
+> **Complete tape → distribution flow:** load tape → load setlist → place markers
+> → **Split & Package**. Out comes a folder with correctly-named tagged FLACs, an
+> FFP checksum, the cover image, the eTree setlist `.txt`, and a torrent —
+> everything a tracker or the LMA expects.
 
 ### ♪ Live Show Tagger
 Tag one show, foo_tradersfriend-style but cross-platform.
@@ -114,10 +122,26 @@ Scan a whole library and normalize every show's tags at once.
 | ✓ **Checksums** | Create & verify MD5, FFP, SFV, CFP, ST5. |
 | ⬡ **Torrents** | Create and verify `.torrent` files. |
 | ◎ **Analysis** | File details (MediaInfo), integrity tests, SBE check, MPEG-in-WAV detection, ReplayGain. |
-| ⊞ **More Tools** | DSD editor/trim, batch rename, strip/repair headers, convert, fix SBEs, update CLI tools. |
+| ⊞ **More Tools** | DSD editor/trim, batch rename, strip/repair headers, convert, fix SBEs, **upload to Archive.org (LMA)**, update CLI tools. |
 
 **⚙ Settings** (top-right) sets default formats, compression levels, output
 folders, and other preferences, persisted across sessions.
+
+### Upload to the Live Music Archive
+Either via the Show Splitter's **Upload to Archive.org (LMA) after** checkbox or
+**More Tools → Upload folder to Archive.org (LMA)…**, a finished folder can be
+uploaded to archive.org's `etree` collection:
+- Builds the etree metadata from the show data and suggests an LMA-style
+  identifier (`alo2026-05-24.schoepsmk21.flac16`, editable).
+- Uses your archive.org **S3 keys** (archive.org/account/s3.php), optionally
+  remembered locally. Uploads the FLACs, `.txt`, and checksums (archive.org
+  generates its own derivatives/torrent).
+- Shows the public URL and asks for **explicit confirmation** before posting.
+
+> Writing to the LMA (`etree`) collection requires being an **approved LMA
+> uploader**, and the band must be trade-friendly. The app performs the upload;
+> it can't grant LMA approval. Requires the `internetarchive` package (bundled in
+> the app; `pip install internetarchive` from source).
 
 ---
 
@@ -221,6 +245,7 @@ TradersLittleJedi.spec  PyInstaller spec
 - **mutagen** — tag read/write (FLAC, MP3, WAV, AIFF, M4A, Ogg, Opus)
 - **tkinterdnd2** — drag-and-drop (optional; the app runs without it)
 - **Pillow** — cover-art previews and icon generation (optional)
+- **internetarchive** — Live Music Archive upload (optional; bundled in the app)
 - ffmpeg, ffprobe, flac, metaflac, lame on PATH (or bundled on Windows)
 
 ---
