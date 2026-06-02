@@ -1,23 +1,31 @@
 name: Release
 
-# Build the macOS .app/.dmg and the Windows .exe on a version tag and attach
-# both to a GitHub Release. Lets us produce a Windows binary without a Windows
-# machine (GitHub provides a windows-latest runner).
+# Build macOS (Apple Silicon + Intel) and Windows binaries on a version tag and
+# attach them to a GitHub Release. Lets us produce all three without owning the
+# hardware (GitHub provides arm64 + Intel macOS runners and a Windows runner).
 on:
   push:
     tags: ["v*"]
-  workflow_dispatch:        # allow manual runs from the Actions tab
+  workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to release (e.g. v0.2.0)"
+        description: "Tag to release (e.g. v0.2.1)"
         required: true
 
 permissions:
-  contents: write           # needed to create/upload the release
+  contents: write
 
 jobs:
   macos:
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14      # Apple Silicon (arm64)
+            arch: arm64
+          - runner: macos-13      # Intel (x86_64)
+            arch: intel
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -36,12 +44,13 @@ jobs:
           TAG="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
           hdiutil create -volname "Trader's Little Jedi" \
             -srcfolder "dist/Trader's Little Jedi.app" \
-            -ov -format UDZO "dist/TradersLittleJedi-${TAG}-mac.dmg"
+            -ov -format UDZO \
+            "dist/TradersLittleJedi-${TAG}-mac-${{ matrix.arch }}.dmg"
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          files: dist/TradersLittleJedi-*-mac.dmg
+          files: dist/TradersLittleJedi-*-mac-${{ matrix.arch }}.dmg
           fail_on_unmatched_files: true
 
   windows:
@@ -69,7 +78,7 @@ jobs:
         run: |
           choco install innosetup --no-progress -y
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer/setup.iss
-        continue-on-error: true     # exe still ships if the installer step fails
+        continue-on-error: true
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:

@@ -97,8 +97,8 @@ if IS_MAC:
         info_plist={
             "CFBundleName":             "Trader's Little Jedi",
             "CFBundleDisplayName":      "Trader's Little Jedi",
-            "CFBundleShortVersionString": "0.2.0",
-            "CFBundleVersion":          "0.2.0",
+            "CFBundleShortVersionString": "0.2.1",
+            "CFBundleVersion":          "0.2.1",
             "CFBundleExecutable":       "TradersLittleJedi",
             "NSHighResolutionCapable":  True,
             "NSRequiresAquaSystemAppearance": False,   # supports dark mode
