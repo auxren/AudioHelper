@@ -17,15 +17,11 @@ permissions:
 
 jobs:
   macos:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-14      # Apple Silicon (arm64)
-            arch: arm64
-          - runner: macos-13      # Intel (x86_64)
-            arch: intel
-    runs-on: ${{ matrix.runner }}
+    # macos-14 has a universal2 Python (via setup-python), so one build runs
+    # natively on both Apple Silicon and Intel — no scarce Intel runner needed.
+    runs-on: macos-14
+    env:
+      TLJ_UNIVERSAL: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -34,23 +30,32 @@ jobs:
       - name: Install build deps
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller pillow mutagen internetarchive tkinterdnd2
-      - name: Generate icons
-        run: python assets/make_icon.py
-      - name: Build .app
+          pip install pyinstaller mutagen internetarchive
+      - name: Generate icons (Pillow is build-time only)
+        run: |
+          pip install pillow
+          python assets/make_icon.py
+          pip uninstall -y pillow   # keep it out of the universal2 bundle
+      - name: Build universal .app
         run: pyinstaller TradersLittleJedi.spec --noconfirm --clean
+      - name: Verify universal2
+        run: |
+          BIN="dist/Trader's Little Jedi.app/Contents/MacOS/TradersLittleJedi"
+          lipo -archs "$BIN"
+          lipo -archs "$BIN" | grep -q "x86_64" && lipo -archs "$BIN" | grep -q "arm64" \
+            && echo "OK: universal2" || { echo "NOT universal2"; exit 1; }
       - name: Package .dmg
         run: |
           TAG="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
           hdiutil create -volname "Trader's Little Jedi" \
             -srcfolder "dist/Trader's Little Jedi.app" \
             -ov -format UDZO \
-            "dist/TradersLittleJedi-${TAG}-mac-${{ matrix.arch }}.dmg"
+            "dist/TradersLittleJedi-${TAG}-mac-universal.dmg"
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          files: dist/TradersLittleJedi-*-mac-${{ matrix.arch }}.dmg
+          files: dist/TradersLittleJedi-*-mac-universal.dmg
           fail_on_unmatched_files: true
 
   windows:

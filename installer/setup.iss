@@ -3,7 +3,7 @@
 ; Or via build_windows.ps1
 
 #define AppName      "Trader's Little Jedi"
-#define AppVersion   "0.2.1"
+#define AppVersion   "0.2.2"
 #define AppPublisher "auxren"
 #define AppURL       "https://github.com/auxren/AudioHelper"
 #define AppExeName   "TradersLittleJedi.exe"

@@ -104,7 +104,7 @@ class _ToolTile(tk.Frame):
 
 class MainWindow(_BaseTk):  # type: ignore[misc,valid-type]
     def __init__(self):
-        global _DND_AVAILABLE
+        global _DND_AVAILABLE, _DND_REASON
         try:
             super().__init__()
         except RuntimeError:

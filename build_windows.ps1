@@ -34,7 +34,7 @@ $SIGN_TIMESTAMP_URL = "http://timestamp.digicert.com"
 # ─────────────────────────────────────────────────────────────────────────────
 
 $APP_NAME    = "Trader's Little Jedi"
-$APP_VERSION = "0.2.1"
+$APP_VERSION = "0.2.2"
 $APP_DIR     = $PSScriptRoot
 $DIST        = "$APP_DIR\dist"
 

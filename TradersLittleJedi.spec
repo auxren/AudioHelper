@@ -3,6 +3,7 @@
 # Build on Mac:     bash build_mac.sh
 # Build on Windows: powershell -File build_windows.ps1
 
+import os
 import sys
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files
@@ -17,6 +18,17 @@ ROOT = Path(SPECPATH)
 # Returns [] cleanly if the package isn't installed in the build venv.
 _IA_HIDDEN = collect_submodules("internetarchive")
 _IA_DATA = collect_data_files("internetarchive")
+
+# Pillow + tkinterdnd2 are bundled on Windows (drag-drop works there) but
+# excluded on macOS so the universal2 build doesn't choke on their arm64-only
+# native code. Both are optional at runtime.
+_OPT_HIDDEN = [] if IS_MAC else ["PIL", "PIL.Image", "PIL.ImageTk", "tkinterdnd2"]
+_MAC_EXCLUDE = ["PIL", "tkinterdnd2"] if IS_MAC else []
+
+# Universal2 (Intel + Apple Silicon) only when TLJ_UNIVERSAL is set — CI sets it
+# on a universal2 Python runner. A plain local build (single-arch Python) leaves
+# this None so it builds for the host arch and doesn't error.
+_MAC_ARCH = "universal2" if (IS_MAC and os.environ.get("TLJ_UNIVERSAL")) else None
 
 # ── Analysis ──────────────────────────────────────────────────────────────────
 a = Analysis(
@@ -39,9 +51,6 @@ a = Analysis(
         "mutagen.id3", "mutagen.id3._tags", "mutagen.id3._frames",
         "mutagen.mp4", "mutagen.oggvorbis", "mutagen.oggopus",
         "mutagen.wave", "mutagen.aiff",
-        # optional
-        "PIL", "PIL.Image", "PIL.ImageTk",
-        "tkinterdnd2",
         # audiohelper submodules imported lazily inside functions
         # (PyInstaller's static scan misses `from .x import Y` inside methods)
         "audiohelper.batch_convert", "audiohelper.bulk_tagger",
@@ -51,15 +60,18 @@ a = Analysis(
         # stdlib used dynamically
         "array", "json", "threading", "subprocess", "pathlib",
         "tempfile", "shutil", "re", "struct", "zlib", "webbrowser",
-    ] + _IA_HIDDEN,
+    ] + _IA_HIDDEN + _OPT_HIDDEN,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    # Exclude heavy/optional deps and the hidden HighGrabber subpackage
-    # (it's never imported by the GUI and would drag in playwright/httpx).
+    # Exclude heavy/optional deps and the hidden HighGrabber subpackage.
+    # On macOS we also exclude Pillow (arm64-only C extensions) and
+    # tkinterdnd2 (single-arch tkdnd lib) so the universal2 build succeeds —
+    # both are optional at runtime (cover preview / drag-drop degrade
+    # gracefully). On Windows they're kept (drag-drop works there).
     excludes=["numpy", "scipy", "matplotlib", "IPython", "jupyter",
               "audiohelper.highgrabber", "playwright", "httpx", "keyring",
-              "pytest", "_pytest"],
+              "pytest", "_pytest"] + _MAC_EXCLUDE,
     noarchive=False,
 )
 
@@ -78,6 +90,7 @@ if IS_MAC:
         strip=False,
         upx=False,          # UPX can trigger Gatekeeper on Mac — leave off
         console=False,      # No Terminal window
+        target_arch=_MAC_ARCH,      # universal2 in CI (Intel + Apple Silicon)
         icon=str(ROOT / "assets" / "icon.icns"),
     )
     coll = COLLECT(
@@ -97,8 +110,8 @@ if IS_MAC:
         info_plist={
             "CFBundleName":             "Trader's Little Jedi",
             "CFBundleDisplayName":      "Trader's Little Jedi",
-            "CFBundleShortVersionString": "0.2.1",
-            "CFBundleVersion":          "0.2.1",
+            "CFBundleShortVersionString": "0.2.2",
+            "CFBundleVersion":          "0.2.2",
             "CFBundleExecutable":       "TradersLittleJedi",
             "NSHighResolutionCapable":  True,
             "NSRequiresAquaSystemAppearance": False,   # supports dark mode
