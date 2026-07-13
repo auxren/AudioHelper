@@ -252,12 +252,12 @@ TradersLittleJedi.spec  PyInstaller spec
 
 ## License
 
-Trader's Little Jedi is licensed under
-[**Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0)**](https://creativecommons.org/licenses/by-nc/4.0/).
+Trader's Little Jedi is licensed under the
+[**PolyForm Noncommercial License 1.0.0**](https://polyformproject.org/licenses/noncommercial/1.0.0/).
 
 You are free to **use, copy, modify, fork, and share** it for any
-**non-commercial** purpose, as long as you give appropriate **attribution**.
-**Commercial use is not permitted.** See [LICENSE](LICENSE) for the full text.
+**non-commercial** purpose. **Commercial use is not permitted.** See
+[LICENSE](LICENSE) for the full text.
 
 ---
 
