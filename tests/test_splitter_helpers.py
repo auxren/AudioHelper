@@ -143,3 +143,40 @@ def test_envelope_silence_detection():
         assert abs(b[1] - 190) < 3
     finally:
         root.destroy()
+
+
+# ── Audacity label parsing ─────────────────────────────────────────────────────
+
+def test_audacity_labels_basic():
+    from audiohelper.show_splitter import parse_audacity_labels
+    text = (
+        "0.000000\t315.864998\tCan't Wait For Tonight\n"
+        "315.864998\t855.487600\tThrow It Away\n"
+        "855.487600\t1543.216772\tNicolette >\n"
+    )
+    rows = parse_audacity_labels(text)
+    assert len(rows) == 3
+    assert rows[0] == (0.0, 315.864998, "Can't Wait For Tonight")
+    assert rows[2][2] == "Nicolette >"
+
+
+def test_audacity_labels_sorted_and_untitled():
+    from audiohelper.show_splitter import parse_audacity_labels
+    # Out-of-order rows and a label with no title.
+    text = "100.5\t200\tSecond\n0\t100.5\n"
+    rows = parse_audacity_labels(text)
+    assert [r[0] for r in rows] == [0.0, 100.5]
+    assert rows[0][2] == ""
+
+
+def test_audacity_labels_skips_spectral_rows():
+    from audiohelper.show_splitter import parse_audacity_labels
+    text = "0\t10\tIntro\n\\\t440.0\t880.0\n10\t20\tJam\n"
+    assert len(parse_audacity_labels(text)) == 2
+
+
+def test_audacity_labels_rejects_setlists():
+    from audiohelper.show_splitter import parse_audacity_labels
+    # Ordinary eTree text must not be mistaken for labels.
+    assert parse_audacity_labels("Artist: Phish\n1. Tweezer\n2. Hood\n") == []
+    assert parse_audacity_labels("") == []

@@ -24,6 +24,9 @@ from typing import Optional
 
 from . import theme as _t
 from .action_picker import AUDIO_EXTS
+from .auto_align import (
+    SetlistEntry, align as align_boundaries, envelope_db, find_dips,
+)
 from .live_tagger import (
     EtreeShow, parse_etree_file, read_text_smart, generate_etree_file,
 )
@@ -193,6 +196,7 @@ def _guess_abbrev(artist: str) -> str:
         "bruce springsteen": "bruce", "grahame lesh & friends": "glaf",
         "railroad earth": "rre", "blues traveler": "bt", "moe.": "moe",
         "the disco biscuits": "db", "trey anastasio": "trey",
+        "dogs in a pile": "dogs",
     }
     if a in known:
         return known[a]
@@ -201,6 +205,36 @@ def _guess_abbrev(artist: str) -> str:
     if len(words) == 1:
         return words[0][:8]
     return "".join(w[0] for w in words)[:6]
+
+
+def parse_audacity_labels(content: str) -> list[tuple[float, float, str]]:
+    """Parse an Audacity (or Logic-exported) label file into
+    ``[(start_sec, end_sec, title), …]`` sorted by start time.
+
+    The format is one label per line: ``start<TAB>end<TAB>title`` with times
+    as plain seconds (``855.487600``). Audacity's optional spectral-selection
+    rows (a second line starting with ``\\``) are skipped. Returns ``[]``
+    unless *every* remaining non-blank line matches, so ordinary setlist
+    text can never be mistaken for labels.
+    """
+    rows: list[tuple[float, float, str]] = []
+    for line in content.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        if line.startswith("\\"):       # spectral-selection frequency row
+            continue
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split("\t", 2)
+        if len(parts) < 2:
+            return []
+        try:
+            start, end = float(parts[0]), float(parts[1])
+        except ValueError:
+            return []
+        title = parts[2].strip() if len(parts) > 2 else ""
+        rows.append((start, end, title))
+    rows.sort(key=lambda r: r[0])
+    return rows
 
 
 def _probe(ffprobe: Path, path: Path) -> dict:
@@ -289,6 +323,7 @@ class SplitTrack:
     start_sec: float
     disc: int = 1
     disc_total: int = 1
+    flagged: bool = False        # low-confidence proposed start (⚠ in the list)
 
 
 # ── Waveform canvas ───────────────────────────────────────────────────────────
@@ -981,7 +1016,10 @@ class ShowSplitterDialog(tk.Toplevel):
         self.btn_silence = ttk.Button(bar, text="Detect silences",
                                       command=self._run_silence_detect, state="disabled")
         self.btn_silence.pack(side="left")
-        ttk.Button(bar, text="Even split", command=self._even_split).pack(side="left", padx=4)
+        self.btn_propose = ttk.Button(bar, text="Propose splits",
+                                      command=self._run_propose, state="disabled")
+        self.btn_propose.pack(side="left", padx=4)
+        ttk.Button(bar, text="Even split", command=self._even_split).pack(side="left")
         ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=6)
         ttk.Button(bar, text="Add track",  command=self._add_track).pack(side="left")
         ttk.Button(bar, text="Remove",     command=self._remove_track).pack(side="left", padx=4)
@@ -1274,6 +1312,7 @@ class ShowSplitterDialog(tk.Toplevel):
             self.var_outdir.set(str(path.parent))
 
         self.btn_silence.configure(state="normal" if dur > 0 else "disabled")
+        self.btn_propose.configure(state="normal" if dur > 0 else "disabled")
         self.waveform.load(path, ffmpeg, dur,
                            status_cb=lambda msg: self.status.configure(text=msg))
         # Even-split only when tracks came from a setlist with no real times.
@@ -1289,7 +1328,7 @@ class ShowSplitterDialog(tk.Toplevel):
 
     def _load_txt_dialog(self) -> None:
         f = filedialog.askopenfilename(
-            parent=self, title="Select eTree text file",
+            parent=self, title="Select setlist or Audacity label file",
             initialdir=self.config_obj.get("last_input_dir") or None,
             filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
         )
@@ -1301,6 +1340,12 @@ class ShowSplitterDialog(tk.Toplevel):
             content = read_text_smart(p)
         except OSError as e:
             messagebox.showerror("Show Splitter", f"Cannot read {p.name}:\n{e}")
+            return
+        labels = parse_audacity_labels(content)
+        if labels:
+            self._tracks_from_labels(labels)
+            self.status.configure(
+                text=f"Audacity labels: {p.name}  ({len(self._tracks)} tracks)")
             return
         show = parse_etree_file(content)
         self._show = show
@@ -1327,6 +1372,21 @@ class ShowSplitterDialog(tk.Toplevel):
         self._refresh_tv()
         self._update_split_btn()
 
+    def _tracks_from_labels(self, labels: list[tuple[float, float, str]]) -> None:
+        """Replace the track list with exact start times from a label file.
+        Keeps titles already loaded from a setlist when the labels carry none."""
+        old_titles = [t.title for t in self._tracks]
+        new: list[SplitTrack] = []
+        for i, (start, _end, title) in enumerate(labels, 1):
+            if not title and i <= len(old_titles):
+                title = old_titles[i - 1]
+            new.append(SplitTrack(number=i, title=title or f"Track {i:02d}",
+                                  start_sec=round(start, 2)))
+        self._tracks = new
+        self._sync_markers()
+        self._refresh_tv()
+        self._update_split_btn()
+
     # ── Split-point helpers ───────────────────────────────────────────────────
 
     def _even_split(self) -> None:
@@ -1338,6 +1398,85 @@ class ShowSplitterDialog(tk.Toplevel):
             t.start_sec = round(i * step, 2)
         self._sync_markers()
         self._refresh_tv()
+
+    def _run_propose(self) -> None:
+        """Propose a full set of split points from the setlist + audio.
+
+        Uses the decoded envelope (dips) and, when faster-whisper is
+        installed, a local transcription pass so song titles sung in
+        choruses anchor the boundaries. Low-confidence proposals are
+        flagged ⚠ in the track list for auditioning.
+        """
+        if self._duration <= 0 or not self.waveform._samples:
+            self.status.configure(text="Wait for the waveform to finish decoding.")
+            return
+        if len(self._tracks) < 2:
+            self.status.configure(
+                text="Load a setlist first — proposals need the track count and titles.")
+            return
+        setlist = [SetlistEntry(t.title.rstrip(" >").strip(),
+                                t.title.rstrip().endswith(">"))
+                   for t in self._tracks]
+        samples = self.waveform._samples
+        duration, path = self._duration, self._audio_path
+        self.btn_propose.configure(state="disabled")
+        self.status.configure(text="Analyzing envelope…")
+
+        def _status(msg: str) -> None:
+            self.after(0, lambda: self.status.configure(text=msg))
+
+        def _worker():
+            env, frame = envelope_db(samples, duration)
+            dips = find_dips(env, frame)
+            transcript: list[tuple[float, float, str]] = []
+            try:
+                from faster_whisper import WhisperModel
+                _status("Transcribing locally for lyric anchors… "
+                        "(first run downloads the model)")
+                model = WhisperModel("small", device="cpu", compute_type="int8")
+                segs, _info = model.transcribe(
+                    str(path), language="en", beam_size=1,
+                    condition_on_previous_text=False)
+                for s in segs:
+                    transcript.append((s.start, s.end, s.text))
+                    _status(f"Transcribing… {_fmt_time(s.end)} / "
+                            f"{_fmt_time(duration)}")
+            except ImportError:
+                _status("faster-whisper not installed — proposing from "
+                        "envelope only (pip install faster-whisper for "
+                        "lyric-guided proposals).")
+            except Exception:
+                pass  # transcription is best-effort; dips still work
+            bounds = align_boundaries(setlist, dips, transcript, duration)
+            self.after(0, lambda: self._apply_proposal(bounds))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _apply_proposal(self, bounds) -> None:
+        self.btn_propose.configure(state="normal")
+        if not bounds:
+            self.status.configure(
+                text="Could not propose splits — no usable gaps found. "
+                     "Try Detect silences or place markers manually.")
+            return
+        for t in self._tracks:
+            t.flagged = False
+        self._tracks[0].start_sec = 0.0
+        for b in bounds:
+            idx = b.index + 1
+            if idx < len(self._tracks):
+                self._tracks[idx].start_sec = round(b.time, 2)
+                self._tracks[idx].flagged = b.confidence < 0.4
+        self._sort_tracks()
+        self._sync_markers()
+        self._refresh_tv()
+        self._update_split_btn()
+        n_low = sum(t.flagged for t in self._tracks)
+        msg = f"Proposed {len(bounds)} boundaries."
+        if n_low:
+            msg += (f"  {n_low} low-confidence (⚠) — click each to audition, "
+                    "then drag its marker.")
+        self.status.configure(text=msg)
 
     def _run_silence_detect(self) -> None:
         if self._duration <= 0:
@@ -1426,6 +1565,7 @@ class ShowSplitterDialog(tk.Toplevel):
         track_idx = marker_idx + 1  # marker 0 = track 2
         if track_idx < len(self._tracks):
             self._tracks[track_idx].start_sec = round(new_time, 2)
+            self._tracks[track_idx].flagged = False  # human-adjusted → trusted
             self._sort_tracks()
             self._refresh_tv()
             # Reselect the track now at this start time
@@ -1449,8 +1589,10 @@ class ShowSplitterDialog(tk.Toplevel):
         for iid in self.tv.get_children():
             self.tv.delete(iid)
         for t in self._tracks:
-            self.tv.insert("", "end", values=(t.number, _fmt_time(t.start_sec),
-                                               t.title, t.disc))
+            start = _fmt_time(t.start_sec)
+            if t.flagged:
+                start = f"⚠ {start}"
+            self.tv.insert("", "end", values=(t.number, start, t.title, t.disc))
         children = self.tv.get_children()
         if sel_idx is not None and sel_idx < len(children):
             self.tv.selection_set(children[sel_idx])
@@ -1505,6 +1647,7 @@ class ShowSplitterDialog(tk.Toplevel):
             t.disc = max(1, int(self.var_disc_edit.get()))
         except ValueError:
             pass
+        t.flagged = False     # human-adjusted → trusted
         self._sort_tracks()   # an edited start time may reorder the tracks
         self._refresh_tv()
         self._sync_markers()
