@@ -86,7 +86,7 @@ jobs:
 
       - name: Package .dmg
         run: |
-          TAG="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
           hdiutil create -volname "Trader's Little Jedi" \
             -srcfolder "dist/Trader's Little Jedi.app" \
             -ov -format UDZO \
