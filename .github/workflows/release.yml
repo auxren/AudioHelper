@@ -22,6 +22,9 @@ jobs:
     runs-on: macos-14
     env:
       TLJ_UNIVERSAL: "1"
+      # Signing/notarization run only when the repo secrets exist; without
+      # them the build still succeeds but ships unsigned (Gatekeeper warns).
+      HAVE_SIGNING: ${{ secrets.MACOS_CERT_P12 != '' && secrets.APPLE_ID != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -44,6 +47,43 @@ jobs:
           lipo -archs "$BIN"
           lipo -archs "$BIN" | grep -q "x86_64" && lipo -archs "$BIN" | grep -q "arm64" \
             && echo "OK: universal2" || { echo "NOT universal2"; exit 1; }
+      - name: Import Developer ID certificate
+        if: env.HAVE_SIGNING == 'true'
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN_PW=$(openssl rand -hex 16)
+          security create-keychain -p "$KEYCHAIN_PW" build.keychain-db
+          security default-keychain -s build.keychain-db
+          security unlock-keychain -p "$KEYCHAIN_PW" build.keychain-db
+          echo "$MACOS_CERT_P12" | base64 --decode > cert.p12
+          security import cert.p12 -k build.keychain-db \
+            -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          rm cert.p12
+          security set-key-partition-list -S apple-tool:,apple: \
+            -s -k "$KEYCHAIN_PW" build.keychain-db
+          ID=$(security find-identity -v -p codesigning build.keychain-db \
+               | grep "Developer ID Application" | head -1 \
+               | sed 's/.*"\(.*\)"/\1/')
+          [ -n "$ID" ] || { echo "No Developer ID Application cert found"; exit 1; }
+          echo "SIGN_IDENTITY=$ID" >> "$GITHUB_ENV"
+
+      - name: Code sign .app (hardened runtime)
+        if: env.HAVE_SIGNING == 'true'
+        run: |
+          APP="dist/Trader's Little Jedi.app"
+          find "$APP/Contents/MacOS" -type f -exec \
+            codesign --force --sign "$SIGN_IDENTITY" \
+                     --options runtime --timestamp {} \;
+          find "$APP/Contents/Frameworks" \( -name "*.dylib" -o -name "*.so" \) 2>/dev/null | \
+            xargs -I{} codesign --force --sign "$SIGN_IDENTITY" \
+                                --options runtime --timestamp {} || true
+          codesign --deep --force --sign "$SIGN_IDENTITY" \
+                   --options runtime --timestamp \
+                   --entitlements assets/entitlements.plist "$APP"
+          codesign --verify --deep --strict "$APP"
+
       - name: Package .dmg
         run: |
           TAG="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
@@ -51,6 +91,20 @@ jobs:
             -srcfolder "dist/Trader's Little Jedi.app" \
             -ov -format UDZO \
             "dist/TradersLittleJedi-${TAG}-mac-universal.dmg"
+
+      - name: Notarize and staple
+        if: env.HAVE_SIGNING == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          DMG=$(ls dist/TradersLittleJedi-*-mac-universal.dmg)
+          codesign --force --sign "$SIGN_IDENTITY" --timestamp "$DMG"
+          xcrun notarytool submit "$DMG" \
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" --wait
+          xcrun stapler staple "$DMG"
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:

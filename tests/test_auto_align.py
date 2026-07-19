@@ -94,13 +94,30 @@ def test_align_respects_min_track_length():
     assert bounds[0].time == 600.0           # 20 s first track is impossible
 
 
-def test_align_segue_lowers_confidence():
-    setlist = [SetlistEntry("Alpha", segue=True), SetlistEntry("Beta"),
+def test_align_margin_confidence_drops_with_competing_dip():
+    # A decoy dip near a boundary's chosen dip means the alignment barely
+    # prefers one over the other → the DP margin, and confidence, must drop.
+    setlist = [SetlistEntry("Alpha"), SetlistEntry("Beta"),
                SetlistEntry("Gamma")]
-    dips = [Dip(300.0, -30, 15), Dip(700.0, -30, 15)]
-    hint = [(310.0, 314.0, "beta"), (710.0, 714.0, "gamma")]
-    b_seg, b_gap = align(setlist, dips, hint, 1000.0)
-    assert b_seg.confidence < b_gap.confidence
+    clean = align(setlist, [Dip(400.0, -30, 15), Dip(800.0, -30, 15)],
+                  [], 1200.0)
+    contested = align(setlist, [Dip(400.0, -30, 15), Dip(520.0, -30, 15),
+                                Dip(800.0, -30, 15)], [], 1200.0)
+    assert contested[0].confidence < clean[0].confidence
+
+
+def test_align_sandwich_hits_assigned_per_occurrence():
+    # "Alpha > Beta > Alpha": the reprise's chorus must anchor the SECOND
+    # Alpha, not drag the first boundary toward the reprise.
+    setlist = [SetlistEntry("Alpha Song", segue=True), SetlistEntry("Beta Tune"),
+               SetlistEntry("Alpha Song"), SetlistEntry("Closer Jam")]
+    dips = [Dip(300.0, -30, 15), Dip(600.0, -30, 15), Dip(900.0, -30, 15)]
+    transcript = [(120.0, 124.0, "alpha song yeah"),      # first occurrence
+                  (320.0, 324.0, "beta tune"),
+                  (620.0, 624.0, "alpha song again"),     # reprise
+                  (920.0, 924.0, "closer jam")]
+    bounds = align(setlist, dips, transcript, 1200.0)
+    assert [b.time for b in bounds] == [300.0, 600.0, 900.0]
 
 
 def test_align_empty_inputs():

@@ -170,6 +170,40 @@ def title_matches(title: str, words: list[tuple[float, str]],
 
 # ── Alignment ────────────────────────────────────────────────────────────────
 
+def _cluster_hits(hits: list[tuple[float, float]],
+                  gap: float = 120.0) -> list[list[tuple[float, float]]]:
+    """Split title hits into temporal clusters (runs separated by > gap)."""
+    clusters: list[list[tuple[float, float]]] = []
+    for h in sorted(hits):
+        if clusters and h[0] - clusters[-1][-1][0] <= gap:
+            clusters[-1].append(h)
+        else:
+            clusters.append([h])
+    return clusters
+
+
+def _hits_per_entry(setlist: list[SetlistEntry],
+                    words: list[tuple[float, str]]) -> list[list[tuple[float, float]]]:
+    """Title hits for each setlist entry, with repeated titles (sandwiches
+    like Driving Song > X > Driving Song) disambiguated: each temporal
+    cluster of hits goes to one occurrence, clusters and occurrences taken
+    in time/set order. Without this, a reprise's chorus pulls the first
+    occurrence's boundary toward the reprise (off-by-one chains)."""
+    raw = [title_matches(e.title, words) for e in setlist]
+    by_title: dict[str, list[int]] = {}
+    for i, e in enumerate(setlist):
+        by_title.setdefault(e.title.lower(), []).append(i)
+    out: list[list[tuple[float, float]]] = [[] for _ in setlist]
+    for title, occs in by_title.items():
+        if len(occs) == 1:
+            out[occs[0]] = raw[occs[0]]
+            continue
+        clusters = _cluster_hits(raw[occs[0]])
+        for k, cluster in enumerate(clusters):
+            out[occs[min(k, len(occs) - 1)]].extend(cluster)
+    return out
+
+
 def _lyric_score(t: float, before_hits: list[tuple[float, float]],
                  after_hits: list[tuple[float, float]]) -> float:
     """Evidence that a boundary at time *t* is correct: the earlier song's
@@ -199,7 +233,7 @@ def align(setlist: list[SetlistEntry], dips: list[Dip],
     if n < 2 or not dips:
         return []
     words = clean_transcript(transcript)
-    hits = [title_matches(e.title, words) for e in setlist]
+    hits = _hits_per_entry(setlist, words)
     mean = total_sec / n
     sigma = 0.55 * mean
 
@@ -210,31 +244,44 @@ def align(setlist: list[SetlistEntry], dips: list[Dip],
 
     nb, nd = n - 1, len(dips)
     NEG = float("-inf")
-    score = [[NEG] * nd for _ in range(nb)]
+    local = [[1.5 * _lyric_score(d.time, hits[b], hits[b + 1])
+              + min(d.prominence, 20.0) / 10.0
+              for d in dips] for b in range(nb)]
+
+    # Forward DP: fwd[b][c] = best score of boundaries 0..b with b at dip c.
+    fwd = [[NEG] * nd for _ in range(nb)]
     back = [[-1] * nd for _ in range(nb)]
-    local = [[0.0] * nd for _ in range(nb)]
-    for b in range(nb):
-        for c, d in enumerate(dips):
-            ls = _lyric_score(d.time, hits[b], hits[b + 1])
-            local[b][c] = 1.5 * ls + min(d.prominence, 20.0) / 10.0
     for c, d in enumerate(dips):
-        score[0][c] = local[0][c] + dur_prior(d.time)
+        fwd[0][c] = local[0][c] + dur_prior(d.time)
     for b in range(1, nb):
         for c, d in enumerate(dips):
             for p in range(c):
-                prev = score[b - 1][p]
-                if prev == NEG:
+                if fwd[b - 1][p] == NEG:
                     continue
-                s = prev + local[b][c] + dur_prior(d.time - dips[p].time)
-                if s > score[b][c]:
-                    score[b][c] = s
+                s = fwd[b - 1][p] + local[b][c] + dur_prior(d.time - dips[p].time)
+                if s > fwd[b][c]:
+                    fwd[b][c] = s
                     back[b][c] = p
-    # Close with the final track's duration prior.
-    best_c, best_s = -1, NEG
+    # Backward DP: bwd[b][c] = best score of everything after boundary b,
+    # given b sits at dip c (its own local score counted in fwd).
+    bwd = [[NEG] * nd for _ in range(nb)]
     for c, d in enumerate(dips):
-        if score[nb - 1][c] == NEG:
+        bwd[nb - 1][c] = dur_prior(total_sec - d.time)
+    for b in range(nb - 2, -1, -1):
+        for c, d in enumerate(dips):
+            for nc in range(c + 1, nd):
+                if bwd[b + 1][nc] == NEG:
+                    continue
+                s = (local[b + 1][nc] + dur_prior(dips[nc].time - d.time)
+                     + bwd[b + 1][nc])
+                if s > bwd[b][c]:
+                    bwd[b][c] = s
+
+    best_c, best_s = -1, NEG
+    for c in range(nd):
+        if fwd[nb - 1][c] == NEG:
             continue
-        s = score[nb - 1][c] + dur_prior(total_sec - d.time)
+        s = fwd[nb - 1][c] + bwd[nb - 1][c]
         if s > best_s:
             best_c, best_s = c, s
     if best_c < 0:
@@ -243,13 +290,22 @@ def align(setlist: list[SetlistEntry], dips: list[Dip],
     for b in range(nb - 1, 0, -1):
         path.append(back[b][path[-1]])
     path.reverse()
+
     out = []
     for b, c in enumerate(path):
         d = dips[c]
-        ls = local[b][c]
-        conf = 1.0 - math.exp(-max(ls, 0.0) / 2.0)
-        if setlist[b].segue:
-            conf *= 0.6          # segue splits are judgment calls by nature
-        out.append(Boundary(b, d.time, round(conf, 2),
-                            round(ls, 2), round(d.prominence, 1)))
+        # Confidence = DP margin: how much worse the full show alignment
+        # gets if this boundary is forced onto any OTHER dip. A repeated
+        # chorus can inflate a local lyric score, but it can't fake a
+        # margin — the alternative path would score nearly as well and
+        # confidence stays low.
+        second = NEG
+        for c2 in range(nd):
+            if c2 == c or fwd[b][c2] == NEG or bwd[b][c2] == NEG:
+                continue
+            second = max(second, fwd[b][c2] + bwd[b][c2])
+        margin = best_s - second if second > NEG else float("inf")
+        conf = 1.0 if margin == float("inf") else 1.0 - math.exp(-margin / 2.0)
+        out.append(Boundary(b, d.time, round(min(conf, 1.0), 2),
+                            round(local[b][c], 2), round(d.prominence, 1)))
     return out

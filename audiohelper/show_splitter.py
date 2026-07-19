@@ -359,6 +359,7 @@ class WaveformView(tk.Frame):
         self._play_wall = 0.0
         self._play_audio = 0.0
         self._preview_tmp: Optional[str] = None
+        self._on_play_done = None   # fires when playback ENDS naturally
         self.on_marker_moved = on_marker_moved
         self.on_seek = on_seek
         self._build()
@@ -834,11 +835,30 @@ class WaveformView(tk.Frame):
                 filtered.append(t)
         return filtered
 
-    def _play(self) -> None:
+    def play_segment(self, start: float, dur: float, on_done=None) -> None:
+        """Audition a window: play [start, start+dur], center the view on it,
+        and call *on_done* if playback runs to the end (not if stopped)."""
+        start = max(0.0, start)
+        self.set_cursor(start)
+        self._play(start=start, dur=dur)
+        self._on_play_done = on_done
+
+    def focus_on(self, t: float, span: float = 24.0) -> None:
+        """Zoom/scroll so *span* seconds are visible, centered on *t*."""
+        w = self._canvas_w()
+        if w <= 1 or self._duration <= 0:
+            return
+        self._zoom = max(w / max(span, 1.0), w / max(self._duration, 1.0))
+        self._scroll_start = max(0.0, t - span / 2)
+        self._clamp_scroll()
+        self._redraw()
+
+    def _play(self, start: Optional[float] = None, dur: float = 120.0) -> None:
         self._stop()
         if not self._audio_path or not self._ffmpeg_path:
             return
-        start = self._cursor
+        if start is None:
+            start = self._cursor
         self._play_wall  = time.monotonic()
         self._play_audio = start
         self.btn_play.configure(state="disabled")
@@ -852,7 +872,7 @@ class WaveformView(tk.Frame):
 
         def _extract():
             cmd = [str(ffmpeg), "-y", "-hide_banner",
-                   "-ss", str(start), "-t", "120",
+                   "-ss", str(start), "-t", str(dur),
                    "-i", str(self._audio_path),
                    "-c:a", "pcm_s16le", "-ar", "44100", "-ac", "2",
                    tmp.name]
@@ -926,8 +946,12 @@ class WaveformView(tk.Frame):
             self._play_after = self.after(80, self._tick_playhead)
         else:
             self._stop_no_proc()
+            cb, self._on_play_done = self._on_play_done, None
+            if cb:
+                cb()
 
     def _stop(self) -> None:
+        self._on_play_done = None   # manual stop → no auto-advance
         if self._play_proc:
             try:
                 self._play_proc.terminate()
@@ -968,6 +992,7 @@ class ShowSplitterDialog(tk.Toplevel):
         self._tracks: list[SplitTrack] = []
         self._show: Optional[EtreeShow] = None
         self._loading_row = False
+        self._review_idx: Optional[int] = None   # track index of the cut under review
 
         self._build_toolbar()
         self._build_body()
@@ -978,6 +1003,21 @@ class ShowSplitterDialog(tk.Toplevel):
 
         # Spacebar toggles play/stop (unless typing in an entry field).
         self.bind_all("<space>", self._on_space)
+        # Cut-review navigation (only active while reviewing, never while
+        # typing — arrows must still move the caret inside entry fields).
+        def _rev_key(delta):
+            def h(_e):
+                w = self.focus_get()
+                if isinstance(w, (tk.Entry, ttk.Entry, tk.Text, ttk.Combobox)):
+                    return None
+                if self._review_idx is not None:
+                    self._review_step(delta)
+                    return "break"
+                return None
+            return h
+        self.bind_all("<Left>",   _rev_key(-1))
+        self.bind_all("<Right>",  _rev_key(+1))
+        self.bind_all("<Escape>", lambda e: self._review_end())
 
         if initial_files:
             audio = [f for f in initial_files
@@ -990,6 +1030,10 @@ class ShowSplitterDialog(tk.Toplevel):
         w = self.focus_get()
         if isinstance(w, (tk.Entry, ttk.Entry, tk.Text, ttk.Combobox)):
             return None
+        if self._review_idx is not None:
+            # In review mode space replays the current cut window.
+            self._review_play()
+            return "break"
         self.waveform.toggle_play()
         return "break"
 
@@ -1000,7 +1044,8 @@ class ShowSplitterDialog(tk.Toplevel):
         except Exception:
             pass
         try:
-            self.unbind_all("<space>")
+            for seq in ("<space>", "<Left>", "<Right>", "<Escape>"):
+                self.unbind_all(seq)
         except Exception:
             pass
         super().destroy()
@@ -1019,7 +1064,10 @@ class ShowSplitterDialog(tk.Toplevel):
         self.btn_propose = ttk.Button(bar, text="Propose splits",
                                       command=self._run_propose, state="disabled")
         self.btn_propose.pack(side="left", padx=4)
-        ttk.Button(bar, text="Even split", command=self._even_split).pack(side="left")
+        self.btn_review = ttk.Button(bar, text="Review cuts",
+                                     command=self._review_start, state="disabled")
+        self.btn_review.pack(side="left")
+        ttk.Button(bar, text="Even split", command=self._even_split).pack(side="left", padx=4)
         ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=6)
         ttk.Button(bar, text="Add track",  command=self._add_track).pack(side="left")
         ttk.Button(bar, text="Remove",     command=self._remove_track).pack(side="left", padx=4)
@@ -1313,6 +1361,7 @@ class ShowSplitterDialog(tk.Toplevel):
 
         self.btn_silence.configure(state="normal" if dur > 0 else "disabled")
         self.btn_propose.configure(state="normal" if dur > 0 else "disabled")
+        self.btn_review.configure(state="normal" if dur > 0 else "disabled")
         self.waveform.load(path, ffmpeg, dur,
                            status_cb=lambda msg: self.status.configure(text=msg))
         # Even-split only when tracks came from a setlist with no real times.
@@ -1478,6 +1527,64 @@ class ShowSplitterDialog(tk.Toplevel):
                     "then drag its marker.")
         self.status.configure(text=msg)
 
+    # ── Cut review mode ───────────────────────────────────────────────────────
+    # Cycle through every proposed split, auditioning a few seconds either
+    # side of each cut — you never listen to the 99% of the show that isn't
+    # a boundary. ←/→ move between cuts, space replays, dragging the marker
+    # nudges and replays, Esc finishes. Auto-advances after each window.
+
+    REVIEW_PRE  = 3.0            # seconds heard before the cut
+    REVIEW_POST = 3.0            # seconds heard after it
+
+    def _review_start(self) -> None:
+        if self._duration <= 0 or len(self._tracks) < 2:
+            self.status.configure(
+                text="Nothing to review — load audio and place some splits first.")
+            return
+        self._review_idx = 1     # first boundary = track 2's start
+        self._review_play()
+
+    def _review_end(self, finished: bool = False) -> None:
+        if self._review_idx is None:
+            return
+        self._review_idx = None
+        self.waveform._stop()
+        n = len(self._tracks) - 1
+        self.status.configure(
+            text=f"Reviewed all {n} cuts." if finished
+            else "Cut review ended.")
+
+    def _review_step(self, delta: int) -> None:
+        if self._review_idx is None:
+            return
+        nxt = self._review_idx + delta
+        if nxt >= len(self._tracks):
+            self._review_end(finished=True)
+            return
+        self._review_idx = max(1, nxt)
+        self._review_play()
+
+    def _review_play(self) -> None:
+        idx = self._review_idx
+        if idx is None or idx >= len(self._tracks):
+            return
+        t = self._tracks[idx].start_sec
+        # Highlight the row and centre the waveform on the cut.
+        children = self.tv.get_children()
+        if idx < len(children):
+            self.tv.selection_set(children[idx])
+            self.tv.see(children[idx])
+        self.waveform.focus_on(t)
+        prev = self._tracks[idx - 1].title
+        cur = self._tracks[idx].title
+        flag = "  ⚠" if self._tracks[idx].flagged else ""
+        self.status.configure(
+            text=f"Cut {idx}/{len(self._tracks) - 1}:  {prev}  →  {cur}{flag}"
+                 "   (←/→ cuts · space replay · drag marker to nudge · Esc done)")
+        self.waveform.play_segment(
+            t - self.REVIEW_PRE, self.REVIEW_PRE + self.REVIEW_POST,
+            on_done=lambda: self.after(400, lambda: self._review_step(+1)))
+
     def _run_silence_detect(self) -> None:
         if self._duration <= 0:
             return
@@ -1566,6 +1673,9 @@ class ShowSplitterDialog(tk.Toplevel):
         if track_idx < len(self._tracks):
             self._tracks[track_idx].start_sec = round(new_time, 2)
             self._tracks[track_idx].flagged = False  # human-adjusted → trusted
+            if self._review_idx == track_idx:
+                # Nudged the cut under review → immediately hear it again.
+                self.after(150, self._review_play)
             self._sort_tracks()
             self._refresh_tv()
             # Reselect the track now at this start time
