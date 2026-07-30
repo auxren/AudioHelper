@@ -4,6 +4,7 @@
 # Build on Windows: powershell -File build_windows.ps1
 
 import os
+import re
 import sys
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files
@@ -12,6 +13,8 @@ IS_MAC = sys.platform == "darwin"
 IS_WIN = sys.platform == "win32"
 
 ROOT = Path(SPECPATH)
+VERSION = re.search(r'"([^"]+)"',
+    (ROOT / "audiohelper" / "__init__.py").read_text()).group(1)
 
 # internetarchive (LMA upload) is imported lazily and has submodules + data
 # files (its metadata schemas). Collect them so the bundled app can upload.
@@ -110,8 +113,8 @@ if IS_MAC:
         info_plist={
             "CFBundleName":             "Trader's Little Jedi",
             "CFBundleDisplayName":      "Trader's Little Jedi",
-            "CFBundleShortVersionString": "0.2.2",
-            "CFBundleVersion":          "0.2.2",
+            "CFBundleShortVersionString": VERSION,
+            "CFBundleVersion":          VERSION,
             "CFBundleExecutable":       "TradersLittleJedi",
             "NSHighResolutionCapable":  True,
             "NSRequiresAquaSystemAppearance": False,   # supports dark mode

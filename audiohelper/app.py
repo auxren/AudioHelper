@@ -320,7 +320,10 @@ class MainWindow(_BaseTk):  # type: ignore[misc,valid-type]
              self._open_lite,          _theme.DEAD_RED),
         ]
 
-        cols = 3
+        # 3 columns up to 6 tiles; 4 columns beyond that so rows stay tall
+        # enough for the two-line descriptions.
+        cols = 3 if len(TILES) <= 6 else 4
+        rows = -(-len(TILES) // cols)
         for i, (icon, title, desc, cmd, accent) in enumerate(TILES):
             row, col = divmod(i, cols)
             tile = _ToolTile(grid, icon, title, desc, cmd, accent)
@@ -328,8 +331,8 @@ class MainWindow(_BaseTk):  # type: ignore[misc,valid-type]
 
         for c in range(cols):
             grid.columnconfigure(c, weight=1, uniform="col")
-        for r in range(3):
-            grid.rowconfigure(r, weight=1)
+        for r in range(rows):
+            grid.rowconfigure(r, weight=1, uniform="row")
 
     # ----- activity log show/hide -----
 
