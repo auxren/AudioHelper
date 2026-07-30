@@ -49,6 +49,24 @@ jobs:
           lipo -archs "$BIN"
           lipo -archs "$BIN" | grep -q "x86_64" && lipo -archs "$BIN" | grep -q "arm64" \
             && echo "OK: universal2" || { echo "NOT universal2"; exit 1; }
+      - name: Bundle universal ffmpeg into Wook's Little Helper
+        run: |
+          mkdir -p ffwheels
+          pip download imageio-ffmpeg --no-deps -d ffwheels \
+            --platform macosx_11_0_arm64 --only-binary=:all: -q
+          pip download imageio-ffmpeg --no-deps -d ffwheels \
+            --platform macosx_10_9_x86_64 --only-binary=:all: -q
+          cd ffwheels
+          for w in *.whl; do unzip -o -q "$w" 'imageio_ffmpeg/binaries/ffmpeg-*' -d "${w%.whl}"; done
+          ARM=$(ls */imageio_ffmpeg/binaries/ffmpeg-macos-aarch64-*)
+          X86=$(ls */imageio_ffmpeg/binaries/ffmpeg-macos-x86_64-*)
+          BIN="../dist/Wook's Little Helper.app/Contents/Resources/bin"
+          mkdir -p "$BIN"
+          lipo -create "$ARM" "$X86" -output "$BIN/ffmpeg"
+          chmod +x "$BIN/ffmpeg"
+          lipo -archs "$BIN/ffmpeg"
+          "$BIN/ffmpeg" -version | head -1
+
       - name: Import Developer ID certificate
         if: env.HAVE_SIGNING == 'true'
         env:
@@ -75,6 +93,10 @@ jobs:
         if: env.HAVE_SIGNING == 'true'
         run: |
           for APP in "dist/Trader's Little Jedi.app" "dist/Wook's Little Helper.app"; do
+            [ -d "$APP/Contents/Resources/bin" ] && \
+              find "$APP/Contents/Resources/bin" -type f -exec \
+                codesign --force --sign "$SIGN_IDENTITY" \
+                         --options runtime --timestamp {} \;
             find "$APP/Contents/MacOS" -type f -exec \
               codesign --force --sign "$SIGN_IDENTITY" \
                        --options runtime --timestamp {} \;

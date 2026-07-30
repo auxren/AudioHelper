@@ -116,6 +116,72 @@ def parse_loose_setlist(text: str) -> list[tuple[str, list[tuple[str, bool]]]]:
     return sets
 
 
+def parse_phishnet_html(html: str) -> str:
+    """Reduce a phish.net setlist page to pasteable 'Set 1: A > B, C' text.
+
+    Song anchors carry class='setlist-song'; set headers are
+    <span class='set-label'>. The separator between two songs lives in the
+    plain text between their tags: ',' (stop), '>' or '->' (segue).
+    Only the first setlist-body on the page is used.
+    """
+    import html as _html
+    i = html.find("setlist-body")
+    if i < 0:
+        return ""
+    chunk = html[i:i + 40000]
+    # Mark songs/labels, drop every other tag, then read the plain text.
+    # Tooltip titles legally contain raw '>' inside quoted attributes, so
+    # every tag pattern must consume quoted strings whole.
+    ATTRS = r"(?:[^>\"']|\"[^\"]*\"|'[^']*')*"
+    chunk = re.sub(r"<span class='set-label'>([^<]+)</span>", "\x01\\1\x01",
+                   chunk)
+
+    def _song(m):
+        return f"\x00{m.group(2)}\x00" if "setlist-song" in m.group(1) else " "
+    chunk = re.sub(rf"<a({ATTRS})>([^<]+)</a>", _song, chunk)
+    chunk = re.sub(rf"<sup{ATTRS}>.*?</sup>", " ", chunk, flags=re.S)
+    end = chunk.find("\x01")
+    if end < 0:
+        return ""
+    stop = re.search(rf"<div(?!{ATTRS}setlist)", chunk[end:])
+    chunk = re.sub(rf"<{ATTRS}>", " ", chunk[:end + stop.start() if stop
+                                             else len(chunk)])
+    lines: list[str] = []
+    tokens = re.split(r"([\x00\x01])", chunk)
+    mode, pending_sep = None, ""
+    for k, tok in enumerate(tokens):
+        if tok == "\x01":
+            mode = "label" if mode != "label" else None
+            continue
+        if tok == "\x00":
+            mode = "song" if mode != "song" else None
+            continue
+        text = _html.unescape(tok).strip()
+        if mode == "label":
+            lines.append(f"\n{text.title()}: ")
+            pending_sep = ""
+        elif mode == "song":
+            lines.append(pending_sep + text)
+            pending_sep = ""
+        else:
+            if "->" in text or ">" in text:
+                pending_sep = " > "
+            elif text.startswith(","):
+                pending_sep = ", "
+    return "".join(lines).strip()
+
+
+def fetch_phishnet_setlist(date: str) -> str:
+    """Fetch phish.net's public setlist page for YYYY-MM-DD and return
+    pasteable setlist text ('' if none found)."""
+    import urllib.request
+    req = urllib.request.Request(
+        f"https://phish.net/setlists/?d={date}",
+        headers={"User-Agent": "WooksLittleHelper/1.0 (show chopper)"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return parse_phishnet_html(r.read().decode("utf-8", "replace"))
+
+
 def plan_output_name(artist: str, date: str) -> str:
     """Folder / file prefix: 'ph2026-07-28' style."""
     abbrev = "".join(w[0] for w in artist.lower().split()[:3]) or "show"
@@ -264,6 +330,11 @@ def chop_show(files: list[Path], sets, meta: dict, outdir: Path,
 
 
 def _tool_path(name: str):
+    import sys
+    # Bundled copy first (Wook's Little Helper ships its own ffmpeg).
+    bundled = (Path(sys.executable).parent.parent / "Resources" / "bin" / name)
+    if bundled.exists():
+        return bundled
     try:
         from .config import Config
         p = get_tool(name).path(Config())
@@ -317,6 +388,10 @@ class LiteWindow:
             ttk.Entry(row, textvariable=v, width=14).grid(row=0,
                                                           column=2 * i + 1,
                                                           padx=(0, 10))
+        self.vars["artist"].set("Phish")
+        self.btn_grab = ttk.Button(row, text="Grab setlist from phish.net",
+                                   command=self._grab_setlist)
+        self.btn_grab.grid(row=0, column=6, padx=(4, 0))
 
         self.btn = tk.Button(f, text="CHOP MY SHOW", font=("Helvetica", 20,
                                                            "bold"),
@@ -340,6 +415,44 @@ class LiteWindow:
 
     def _set_status(self, msg: str):
         self.win.after(0, lambda: self.status.configure(text=msg))
+
+    def _grab_setlist(self):
+        date = self.vars["date"].get().strip()
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
+            self.status.configure(
+                text="Put the show date up there first (YYYY-MM-DD), man.")
+            return
+        if self.vars["artist"].get().strip().lower() not in ("", "phish"):
+            self.status.configure(
+                text="phish.net only knows Phish, man. For other bands, "
+                     "paste the setlist yourself.")
+            return
+        self.btn_grab.configure(state="disabled")
+        self.status.configure(text="Dialing up phish.net… hold my beer.")
+
+        def worker():
+            try:
+                text = fetch_phishnet_setlist(date)
+                if text:
+                    def fill():
+                        self.txt.delete("1.0", "end")
+                        self.txt.insert("1.0", text)
+                        self.status.configure(
+                            text="Got it. Read it over — you were there, "
+                                 "allegedly.")
+                    self.win.after(0, fill)
+                else:
+                    self._set_status("phish.net has nothing for that date "
+                                     "yet, man. Paste it yourself.")
+            except Exception:
+                self._set_status("phish.net isn't picking up, man. Check "
+                                 "your wifi (or the venue's) and paste it "
+                                 "yourself.")
+            finally:
+                self.win.after(0, lambda: self.btn_grab.configure(
+                    state="normal"))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _go(self):
         if not self.files:
