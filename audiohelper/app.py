@@ -316,6 +316,8 @@ class MainWindow(_BaseTk):  # type: ignore[misc,valid-type]
              self._open_analysis_menu, _theme.DEAD_YELLOW),
             ("⊞", "More Tools",        "DSD edit, batch rename,\nstrip headers, repair",
              self._open_more_menu,     _theme.DEAD_GREEN),
+            ("✂", "Show Chopper",      "Raw files in, chopped show out\n(the easy button)",
+             self._open_lite,          _theme.DEAD_RED),
         ]
 
         cols = 3
@@ -572,6 +574,11 @@ class MainWindow(_BaseTk):  # type: ignore[misc,valid-type]
         finally:
             menu.grab_release()
 
+    def _open_lite(self) -> None:
+        """Open the stripped-down Show Chopper window."""
+        from .lite import LiteWindow
+        LiteWindow(parent=self)
+
     def _open_more_menu(self) -> None:
         """Open a quick-picker for secondary tools."""
         menu = tk.Menu(self, tearoff=0)
@@ -763,4 +770,9 @@ class MainWindow(_BaseTk):  # type: ignore[misc,valid-type]
 
 
 def main() -> None:
+    import sys
+    if "--lite" in sys.argv:
+        from .lite import main as lite_main
+        lite_main()
+        return
     MainWindow().mainloop()
