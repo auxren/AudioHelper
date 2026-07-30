@@ -40,7 +40,9 @@ jobs:
           python assets/make_icon.py
           pip uninstall -y pillow   # keep it out of the universal2 bundle
       - name: Build universal .app
-        run: pyinstaller TradersLittleJedi.spec --noconfirm --clean
+        run: |
+          pyinstaller TradersLittleJedi.spec --noconfirm --clean
+          pyinstaller WooksLittleHelper.spec --noconfirm
       - name: Verify universal2
         run: |
           BIN="dist/Trader's Little Jedi.app/Contents/MacOS/TradersLittleJedi"
@@ -72,17 +74,18 @@ jobs:
       - name: Code sign .app (hardened runtime)
         if: env.HAVE_SIGNING == 'true'
         run: |
-          APP="dist/Trader's Little Jedi.app"
-          find "$APP/Contents/MacOS" -type f -exec \
-            codesign --force --sign "$SIGN_IDENTITY" \
-                     --options runtime --timestamp {} \;
-          find "$APP/Contents/Frameworks" \( -name "*.dylib" -o -name "*.so" \) 2>/dev/null | \
-            xargs -I{} codesign --force --sign "$SIGN_IDENTITY" \
-                                --options runtime --timestamp {} || true
-          codesign --deep --force --sign "$SIGN_IDENTITY" \
-                   --options runtime --timestamp \
-                   --entitlements assets/entitlements.plist "$APP"
-          codesign --verify --deep --strict "$APP"
+          for APP in "dist/Trader's Little Jedi.app" "dist/Wook's Little Helper.app"; do
+            find "$APP/Contents/MacOS" -type f -exec \
+              codesign --force --sign "$SIGN_IDENTITY" \
+                       --options runtime --timestamp {} \;
+            find "$APP/Contents/Frameworks" \( -name "*.dylib" -o -name "*.so" \) 2>/dev/null | \
+              xargs -I{} codesign --force --sign "$SIGN_IDENTITY" \
+                                  --options runtime --timestamp {} || true
+            codesign --deep --force --sign "$SIGN_IDENTITY" \
+                     --options runtime --timestamp \
+                     --entitlements assets/entitlements.plist "$APP"
+            codesign --verify --deep --strict "$APP"
+          done
 
       - name: Package .dmg
         run: |
@@ -91,6 +94,10 @@ jobs:
             -srcfolder "dist/Trader's Little Jedi.app" \
             -ov -format UDZO \
             "dist/TradersLittleJedi-${TAG}-mac-universal.dmg"
+          hdiutil create -volname "Wook's Little Helper" \
+            -srcfolder "dist/Wook's Little Helper.app" \
+            -ov -format UDZO \
+            "dist/WooksLittleHelper-${TAG}-mac-universal.dmg"
 
       - name: Notarize and staple
         if: env.HAVE_SIGNING == 'true'
@@ -99,17 +106,20 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
-          DMG=$(ls dist/TradersLittleJedi-*-mac-universal.dmg)
-          codesign --force --sign "$SIGN_IDENTITY" --timestamp "$DMG"
-          xcrun notarytool submit "$DMG" \
-            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
-            --password "$APPLE_APP_PASSWORD" --wait
-          xcrun stapler staple "$DMG"
+          for DMG in dist/*-mac-universal.dmg; do
+            codesign --force --sign "$SIGN_IDENTITY" --timestamp "$DMG"
+            xcrun notarytool submit "$DMG" \
+              --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+              --password "$APPLE_APP_PASSWORD" --wait
+            xcrun stapler staple "$DMG"
+          done
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          files: dist/TradersLittleJedi-*-mac-universal.dmg
+          files: |
+            dist/TradersLittleJedi-*-mac-universal.dmg
+            dist/WooksLittleHelper-*-mac-universal.dmg
           fail_on_unmatched_files: true
 
   windows:

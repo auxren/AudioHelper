@@ -1,4 +1,4 @@
-"""Show Chopper — the stripped-down, wook-proof chopping flow.
+"""Wook's Little Helper — the stripped-down, wook-proof chopping flow.
 
 One window, one big button. Drop the raw set files, paste the setlist
 from your phone (phish.net / etree / one-song-per-line all work), hit
@@ -146,17 +146,19 @@ def _transcribe(path: Path, status) -> list[tuple[float, float, str]]:
     try:
         from faster_whisper import WhisperModel
     except ImportError:
-        status("faster-whisper not installed — chopping by ear (envelope) only.")
+        status("faster-whisper not installed — chopping by feel alone. "
+               "It's fine, man, trust the vibes (and check the cuts after).")
         return []
     try:
-        status("Listening for lyrics… (first run downloads a ~460 MB model)")
+        status("Listening for lyrics… first run downloads a ~460 MB model — "
+               "perfect time to go find your other shoe.")
         model = WhisperModel("small", device="cpu", compute_type="int8")
         segs, _ = model.transcribe(str(path), language="en", beam_size=1,
                                    condition_on_previous_text=False)
         out = []
         for s in segs:
             out.append((s.start, s.end, s.text))
-            status(f"Listening… {int(s.end // 60)} min in")
+            status(f"Listening… {int(s.end // 60)} min in. Stay hydrated.")
         return out
     except Exception:
         return []
@@ -185,7 +187,8 @@ def chop_show(files: list[Path], sets, meta: dict, outdir: Path,
     for si, src in enumerate(files, 1):
         label, entries = (sets[si - 1] if si <= len(sets)
                           else (f"Set {si}", []))
-        status(f"Analyzing {src.name}…")
+        status(f"Shining a flashlight at {src.name}… "
+               "(hey man, get that flashlight out of my face)")
         samples, dur = _decode_envelope(ffmpeg, src)
         if not samples:
             raise RuntimeError(f"Could not decode {src.name}")
@@ -280,11 +283,16 @@ class LiteWindow:
 
     def __init__(self, parent=None):
         self.win = tk.Toplevel(parent) if parent else tk.Tk()
-        self.win.title("Show Chopper")
-        self.win.geometry("620x640")
+        self.win.title("Wook's Little Helper")
+        self.win.geometry("620x680")
         self.files: list[Path] = []
         f = ttk.Frame(self.win, padding=16)
         f.pack(fill="both", expand=True)
+
+        ttk.Label(f, text="Wook's Little Helper",
+                  font=("Helvetica", 22, "bold")).pack(anchor="w")
+        ttk.Label(f, text="Too spun to chop? Say less.",
+                  foreground="gray").pack(anchor="w", pady=(0, 12))
 
         ttk.Label(f, text="1. Throw in your raw files (one per set, in order)",
                   font=("Helvetica", 14, "bold")).pack(anchor="w")
@@ -293,8 +301,8 @@ class LiteWindow:
         ttk.Button(f, text="Add raw files…", command=self._add_files
                    ).pack(anchor="w", pady=(0, 12))
 
-        ttk.Label(f, text="2. Paste the setlist (phish.net paste is fine — "
-                          "or leave empty)",
+        ttk.Label(f, text="2. Paste the setlist (however it looks on your "
+                          "phone is fine — or leave it empty, man)",
                   font=("Helvetica", 14, "bold")).pack(anchor="w")
         self.txt = tk.Text(f, height=8, wrap="word")
         self.txt.pack(fill="both", expand=True, pady=(4, 12))
@@ -335,7 +343,8 @@ class LiteWindow:
 
     def _go(self):
         if not self.files:
-            self.status.configure(text="Add your raw files first.")
+            self.status.configure(text="Can't chop air, man. Add your raw "
+                                       "files first.")
             return
         sets = parse_loose_setlist(self.txt.get("1.0", "end"))
         if sets and len(sets) != len(self.files):
@@ -357,14 +366,18 @@ class LiteWindow:
                          "with info txt + checksums."]
                 if r["flagged"]:
                     lines.append("")
-                    lines.append("Give these cuts a quick listen in the Show "
-                                 "Splitter (Review cuts) before uploading:")
+                    lines.append("Almost heady. When the room settles down, "
+                                 "give these cuts a listen (Review cuts, in "
+                                 "the big app) before you upload:")
                     lines += [f"  ⚠ {x}" for x in r["flagged"]]
                 else:
-                    lines.append("Every cut looks clean. Ship it.")
+                    lines.append("Every cut came out clean. Heady. Drink "
+                                 "some water and go upload.")
                 self._set_status("\n".join(lines))
             except Exception as e:
-                self._set_status(f"Something broke: {e}")
+                self._set_status(f"Whoa. Something broke, man: {e}\n"
+                                 "Breathe. It's probably just a missing tool. "
+                                 "Open the big app once, then try again.")
             finally:
                 self.win.after(0, lambda: self.btn.configure(
                     state="normal", text="CHOP MY SHOW"))
