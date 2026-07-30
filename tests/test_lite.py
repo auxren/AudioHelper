@@ -75,3 +75,18 @@ def test_parse_phishnet_html():
     assert out == ("Set 1: Alpha > Beta > Gamma, Delta\n"
                    "Encore: Echo")
     assert parse_phishnet_html("<html>nope</html>") == ""
+
+
+def test_find_music_span():
+    from audiohelper.lite import find_music_span
+    env = [-30.0] * 40 + [-12.0] * 400 + [-30.0] * 80   # 10s crowd, music, 20s crowd
+    start, end = find_music_span(env, 0.25)
+    assert abs(start - 10.0) < 1.0
+    assert abs(end - 110.0) < 1.0
+    assert find_music_span([], 0.25) == (0.0, 0.0)
+
+
+def test_parse_max_volume():
+    from audiohelper.lite import parse_max_volume
+    assert parse_max_volume("[Parsed_volumedetect] max_volume: -3.4 dB") == -3.4
+    assert parse_max_volume("no match") is None

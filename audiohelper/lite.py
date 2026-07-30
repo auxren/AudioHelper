@@ -182,6 +182,39 @@ def fetch_phishnet_setlist(date: str) -> str:
         return parse_phishnet_html(r.read().decode("utf-8", "replace"))
 
 
+def find_music_span(env_db: list[float], frame_sec: float,
+                    sustain_sec: float = 5.0,
+                    drop_db: float = 8.0) -> tuple[float, float]:
+    """(music_start, music_end) in seconds: the first/last time the envelope
+    holds above (median - drop_db) for sustain_sec. Crowd before the opener
+    and after the closer sits below that; the show itself doesn't."""
+    if not env_db:
+        return 0.0, 0.0
+    med = sorted(env_db)[len(env_db) // 2]
+    thresh = med - drop_db
+    need = max(1, int(sustain_sec / frame_sec))
+    start, end = 0.0, len(env_db) * frame_sec
+    run = 0
+    for i, v in enumerate(env_db):
+        run = run + 1 if v > thresh else 0
+        if run >= need:
+            start = (i - need + 1) * frame_sec
+            break
+    run = 0
+    for i in range(len(env_db) - 1, -1, -1):
+        run = run + 1 if env_db[i] > thresh else 0
+        if run >= need:
+            end = (i + need) * frame_sec
+            break
+    return start, end
+
+
+def parse_max_volume(volumedetect_output: str) -> float | None:
+    """Extract max_volume in dB from ffmpeg volumedetect stderr."""
+    m = re.search(r"max_volume:\s*(-?[\d.]+)\s*dB", volumedetect_output)
+    return float(m.group(1)) if m else None
+
+
 def plan_output_name(artist: str, date: str) -> str:
     """Folder / file prefix: 'ph2026-07-28' style."""
     abbrev = "".join(w[0] for w in artist.lower().split()[:3]) or "show"
@@ -231,13 +264,14 @@ def _transcribe(path: Path, status) -> list[tuple[float, float, str]]:
 
 
 def chop_show(files: list[Path], sets, meta: dict, outdir: Path,
-              status) -> dict:
+              status, opts: dict | None = None) -> dict:
     """Run the whole pipeline. Returns a summary dict.
 
     files: one audio file per set, in order. sets: parse_loose_setlist()
     output (empty → auto-detect gaps, generic titles). meta: artist/date/
     venue/location strings. status: callable(str) for progress lines.
     """
+    opts = opts or {}
     ffmpeg = _tool_path("ffmpeg")
     if not ffmpeg:
         raise RuntimeError("ffmpeg not found — open the main app once so it "
@@ -260,6 +294,16 @@ def chop_show(files: list[Path], sets, meta: dict, outdir: Path,
             raise RuntimeError(f"Could not decode {src.name}")
         env, frame = envelope_db(samples, dur)
         dips = find_dips(env, frame)
+        music_start, music_end = find_music_span(env, frame)
+        gain_db = 0.0
+        if opts.get("normalize"):
+            vd = subprocess.run(
+                [str(ffmpeg), "-i", str(src), "-af", "volumedetect",
+                 "-f", "null", "-"], capture_output=True, text=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            peak = parse_max_volume(vd.stderr)
+            if peak is not None:
+                gain_db = round(-0.5 - peak, 2)  # one gain per set: no pumping
         if not entries:
             entries = [(f"Track {i + 1:02d}", False)
                        for i in range(len(dips) + 1)]
@@ -276,8 +320,30 @@ def chop_show(files: list[Path], sets, meta: dict, outdir: Path,
             name = f"{prefix}s{si}t{ti:02d}.flac"
             out = outdir / name
             status(f"Cutting {name}  ({title})")
-            cmd = [str(ffmpeg), "-v", "error", "-y", "-i", str(src),
-                   "-ss", str(t0)]
+            first, last = ti == 1, ti == len(entries)
+            if opts.get("trim_fade"):
+                if first and music_start > 7:
+                    t0 = max(0.0, music_start - 5)   # keep a little crowd
+                if last and t1 is None and music_end + 10 < dur:
+                    t1 = music_end + 8
+            af = []
+            if abs(gain_db) > 0.05:
+                af.append(f"volume={gain_db}dB")
+            fmt = opts.get("out", "orig")
+            if fmt in ("s16_48000", "s16_44100"):
+                rate = 48000 if fmt == "s16_48000" else 44100
+                dm = ("triangular_hp" if opts.get("dither", True) else "none")
+                af.append(f"aresample=osr={rate}:"
+                          f"out_sample_fmt=s16:dither_method={dm}")
+            if opts.get("trim_fade"):
+                if first:
+                    af.append(f"afade=t=in:st={t0}:d=2")
+                if last and t1 is not None:
+                    af.append(f"afade=t=out:st={max(t0, t1 - 4)}:d=4")
+            cmd = [str(ffmpeg), "-v", "error", "-y", "-i", str(src)]
+            if af:
+                cmd += ["-af", ",".join(af)]
+            cmd += ["-ss", str(t0)]
             if t1 is not None:
                 cmd += ["-to", str(t1)]
             cmd += ["-map_metadata", "-1", "-c:a", "flac",
@@ -393,6 +459,24 @@ class LiteWindow:
                                    command=self._grab_setlist)
         self.btn_grab.grid(row=0, column=6, padx=(4, 0))
 
+        oprow = ttk.Frame(f)
+        oprow.pack(fill="x", pady=(0, 10))
+        self.var_trim = tk.BooleanVar(value=True)
+        self.var_norm = tk.BooleanVar(value=False)
+        self.var_dither = tk.BooleanVar(value=True)
+        ttk.Checkbutton(oprow, text="Trim & fade the lot chatter",
+                        variable=self.var_trim).pack(side="left")
+        ttk.Checkbutton(oprow, text="Normalize (per set)",
+                        variable=self.var_norm).pack(side="left", padx=(10, 0))
+        ttk.Label(oprow, text="   Output:").pack(side="left")
+        self.var_fmt = tk.StringVar(value="Original resolution")
+        ttk.Combobox(oprow, textvariable=self.var_fmt, width=17,
+                     state="readonly",
+                     values=("Original resolution", "16-bit / 48 kHz",
+                             "16-bit / 44.1 kHz")).pack(side="left", padx=4)
+        ttk.Checkbutton(oprow, text="Dither", variable=self.var_dither
+                        ).pack(side="left")
+
         self.btn = tk.Button(f, text="CHOP MY SHOW", font=("Helvetica", 20,
                                                            "bold"),
                              height=2, command=self._go)
@@ -472,9 +556,17 @@ class LiteWindow:
             meta.get("artist", ""), meta.get("date", ""))
         self.btn.configure(state="disabled", text="CHOPPING…")
 
+        fmt_map = {"16-bit / 48 kHz": "s16_48000",
+                   "16-bit / 44.1 kHz": "s16_44100"}
+        opts = {"trim_fade": self.var_trim.get(),
+                "normalize": self.var_norm.get(),
+                "out": fmt_map.get(self.var_fmt.get(), "orig"),
+                "dither": self.var_dither.get()}
+
         def worker():
             try:
-                r = chop_show(self.files, sets, meta, outdir, self._set_status)
+                r = chop_show(self.files, sets, meta, outdir,
+                              self._set_status, opts)
                 lines = [f"DONE. {r['tracks']} tracks in {r['outdir'].name}/ "
                          "with info txt + checksums."]
                 if r["flagged"]:

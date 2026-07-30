@@ -26,7 +26,7 @@ SIGN_IDENTITY=""         # e.g. "Developer ID Application: Your Name (TEAMID)"
 
 APP_NAME="Trader's Little Jedi"
 BUNDLE_ID="com.auxren.audiohelper"
-VERSION="0.6.0"
+VERSION="0.7.0"
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"
 DIST="$APP_DIR/dist"
 APP_BUNDLE="$DIST/$APP_NAME.app"
